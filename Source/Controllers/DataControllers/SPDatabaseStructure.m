@@ -33,7 +33,7 @@
 #import "SPTablesList.h"
 #import "RegexKitLite.h"
 #import "SPThreadAdditions.h"
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 #import <pthread.h>
 
 @interface SPDatabaseStructure ()
@@ -41,7 +41,7 @@
 - (void)_destroy:(NSNotification *)notification;
 
 - (void)_updateGlobalVariablesWithStructure:(NSDictionary *)aStructure keys:(NSArray *)theKeys;
-- (void)_cloneConnectionFromConnection:(SPMySQLConnection *)aConnection;
+- (void)_cloneConnectionFromConnection:(SPPostgresConnection *)aConnection;
 - (BOOL)_ensureConnectionUnsafe; // Use _checkConnection instead, where possible
 
 - (void)_addToListAndWaitForFrontCancellingOtherThreads:(BOOL)killOthers;
@@ -68,7 +68,7 @@
 }
 
 /**
- * Standard init method, constructing the SPDatabaseStructure around a SPMySQL
+ * Standard init method, constructing the SPDatabaseStructure around a SPPostgres
  * connection pointer and a delegate.
  */
 - (instancetype)initWithDelegate:(SPDatabaseDocument *)theDelegate
@@ -79,7 +79,7 @@
 		_delegate = theDelegate;
 
 		// Start with no root connection
-		mySQLConnection = nil;
+		postgresConnection = nil;
 
 		// Set up empty structure and keys storage
 		structureRetrievalThreads = [[NSMutableArray alloc] init];
@@ -105,7 +105,7 @@
  * will set up its own connection to allow background querying.  The supplied
  * connection will be used to look up details for the clone process.
  */
-- (void)setConnectionToClone:(SPMySQLConnection *)aConnection
+- (void)setConnectionToClone:(SPPostgresConnection *)aConnection
 {
   SPLog(@"setConnectionToClone");
 	// Perform the task in a background thread to avoid blocking the UI
@@ -118,11 +118,11 @@
 #pragma mark -
 #pragma mark Information
 
-- (SPMySQLConnection *)connection
+- (SPPostgresConnection *)connection
 {
 	// this much is needed to make the accessor atomic and thread-safe
 	pthread_mutex_lock(&connectionCheckLock);
-	SPMySQLConnection *c = mySQLConnection;
+	SPPostgresConnection *c = postgresConnection;
 	pthread_mutex_unlock(&connectionCheckLock);
 	return c;
 }
@@ -146,11 +146,12 @@
 /**
  * Updates the dict containing the structure of all available databases (mainly for completion/navigator)
  * executed on the helper connection.
- * Should always be executed on a background thread. // JCS: but it calls delegate getDbStructure which eventually calls initWithWindowNibName .. which needs to be on main
+ * Should always be executed on a background thread.
  */
 - (void)queryDbStructureWithUserInfo:(NSDictionary *)userInfo
 {
 	@autoreleasepool {
+		@try {
 		BOOL structureWasUpdated = NO;
 
 		[self _addToListAndWaitForFrontCancellingOtherThreads:[[userInfo objectForKey:@"cancelQuerying"] boolValue]];
@@ -220,10 +221,10 @@
 			// Check to see if a cache already exists for the database.
 			if ([[queriedStructure objectForKey:db_id] isKindOfClass:[NSDictionary class]]) {
 
-				// The cache is available. If the `mysql` or `information_schema` databases are being queried,
+				// The cache is available. If the `postgres` or `information_schema` databases are being queried,
 				// never requery as their structure will never change.
-				// 5.5.3+ also has performance_schema meta database
-				if ([currentDatabase isInArray:@[@"mysql",@"information_schema",@"performance_schema"]]) {
+				// PostgreSQL also has pg_catalog as system catalog
+				if ([currentDatabase isInArray:@[@"postgres",@"information_schema",@"pg_catalog"]]) {
 					shouldQueryStructure = NO;
 				}
 				// Otherwise, if the forceUpdate flag wasn't supplied or evaluates to false, also don't update.
@@ -297,7 +298,7 @@
 		structureWasUpdated = YES;
 
 		NSUInteger uniqueCounter = 0; // used to make field data unique
-		SPMySQLResult *theResult;
+		SPPostgresResult *theResult;
 
 		// Loop through the known tables and views, retrieving details for each
 		for (NSDictionary *aTableDict in tablesAndViews) {
@@ -314,15 +315,15 @@
 			 return;
 		 }
 
-            NSString *theQuery = [NSString stringWithFormat:@"SHOW FULL COLUMNS FROM %@ FROM %@", [aTableName backtickQuotedString], [currentDatabase backtickQuotedString]];
+            NSString *theQuery = [NSString stringWithFormat:@"SELECT column_name, data_type, collation_name, is_nullable, '', column_default, '', '', '' FROM information_schema.columns WHERE table_name = %@ AND table_schema = %@", [aTableName tickQuotedString], [currentDatabase tickQuotedString]];
             SPLog(@"aTableName: %@", aTableName);
 
 			// Retrieve the column details
-			theResult = [mySQLConnection queryString:theQuery];
+			theResult = [postgresConnection queryString:theQuery];
 			if (!theResult) {
 				continue;
 			}
-			[theResult setDefaultRowReturnType:SPMySQLResultRowAsArray];
+			[theResult setDefaultRowReturnType:SPPostgresResultRowAsArray];
 			[theResult setReturnDataAsStrings:YES];
 
 			// Add a structure key for this table
@@ -381,8 +382,8 @@
 			usleep(10);
 		}
 
-		// If the MySQL version is higher than 5, also retrieve function/procedure details via the information_schema table
-		if ([mySQLConnection serverMajorVersion] >= 5) {
+		// If the Postgres version is higher than 5, also retrieve function/procedure details via the information_schema table
+		if ([postgresConnection serverMajorVersion] >= 5) {
 			// check the connection.
 			// also NO if thread is cancelled which is fine, too (same consequence).
 			if(![self _checkConnection]) {
@@ -391,9 +392,9 @@
 			}
 
 			// Retrieve the column details (only those we need so we don't fetch the whole function body which might be huge)
-			theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT SPECIFIC_NAME, ROUTINE_TYPE, DTD_IDENTIFIER, IS_DETERMINISTIC, SQL_DATA_ACCESS, SECURITY_TYPE, DEFINER FROM `information_schema`.`ROUTINES` WHERE `ROUTINE_SCHEMA` = %@", [currentDatabase tickQuotedString]]];
+			theResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT specific_name, routine_type, data_type, is_deterministic, sql_data_access, security_type, external_language FROM information_schema.routines WHERE routine_schema = %@", [currentDatabase tickQuotedString]]];
 			[theResult setReturnDataAsStrings:YES]; //TODO workaround for #2700 with mysql 8.0 (see #2699)
-			[theResult setDefaultRowReturnType:SPMySQLResultRowAsArray];
+			[theResult setDefaultRowReturnType:SPPostgresResultRowAsArray];
 
 			// Loop through the rows and extract the function details
 			for (NSArray *row in theResult) {
@@ -441,6 +442,21 @@
 
 		// Remove this thread from the processing stack
 		[self _removeThreadFromList];
+		} // end @try
+		@catch (NSException *exception) {
+			NSLog(@"SPDatabaseStructure queryDbStructureWithUserInfo EXCEPTION: %@ - %@", [exception name], [exception reason]);
+			NSLog(@"Stack: %@", [exception callStackSymbols]);
+			[self _removeThreadFromList];
+			// Show alert on main thread
+			dispatch_async(dispatch_get_main_queue(), ^{
+				NSAlert *alert = [[NSAlert alloc] init];
+				[alert setAlertStyle:NSAlertStyleWarning];
+				[alert setMessageText:@"Database Structure Error"];
+				[alert setInformativeText:[NSString stringWithFormat:@"Exception: %@\n\nReason: %@", [exception name], [exception reason]]];
+				[alert addButtonWithTitle:@"OK"];
+				[alert runModal];
+			});
+		}
 	}
 }
 
@@ -481,7 +497,7 @@
 }
 
 #pragma mark -
-#pragma mark SPMySQLConnection delegate methods
+#pragma mark SPPostgresConnection delegate methods
 
 /**
  * Forward keychain password requests to the database object.
@@ -545,21 +561,21 @@
 /**
  * Set up a new connection in a background thread
  */
-- (void)_cloneConnectionFromConnection:(SPMySQLConnection *)aConnection
+- (void)_cloneConnectionFromConnection:(SPPostgresConnection *)aConnection
 {
 	@autoreleasepool {
 		pthread_mutex_lock(&connectionCheckLock);
 
 		// If a connection is already set, ensure it's idle before releasing it
-		if (mySQLConnection) {
+		if (postgresConnection) {
 			[self _cancelAllThreadsAndWait];
 		}
 
 		// Create a copy of the supplied connection
-		mySQLConnection = [aConnection copy];
+		postgresConnection = [aConnection copy];
 
 		// Set the delegate to this instance
-		[mySQLConnection setDelegate:self];
+		[postgresConnection setDelegate:self];
 
 		// Trigger the connection
 		[self _ensureConnectionUnsafe];
@@ -569,7 +585,7 @@
 }
 
 /**
- * Check if the MySQL connection is still available (reconnecting if possible)
+ * Check if the Postgres connection is still available (reconnecting if possible)
  *
  * **Unsafe** means this function holds no lock on connectionCheckLock.
  * You MUST obtain that lock before calling this method!
@@ -580,10 +596,10 @@
 - (BOOL)_ensureConnectionUnsafe
 {
   SPLog(@"_ensureConnectionUnsafe");
-	if (!mySQLConnection || !self.delegate) return NO;
+	if (!postgresConnection || !self.delegate) return NO;
 
 	// Check the connection state
-	if ([mySQLConnection isConnected] && [mySQLConnection checkConnectionIfNecessary]) return YES;
+	if ([postgresConnection isConnected] && [postgresConnection checkConnectionIfNecessary]) return YES;
 	
 	// the result of checkConnection may be meaningless if the thread was cancelled during execution. (issue #2353)
 	if([[NSThread currentThread] isCancelled]) return NO;
@@ -593,13 +609,13 @@
 	if (![[self.delegate getConnection] isConnected]) return NO;
 
 	// Copy the local port from the parent connection, in case a proxy has changed
-	[mySQLConnection setPort:[[self.delegate getConnection] port]];
+	[postgresConnection setPort:[[self.delegate getConnection] port]];
 
 	// Attempt a connection
-	if (![mySQLConnection connect]) return NO;
+	if (![postgresConnection connect]) return NO;
 
-	// Ensure the encoding is set to UTF8mb4
-	[mySQLConnection setEncoding:@"utf8mb4"];
+	// Ensure the encoding is set to UTF8
+	[postgresConnection setEncoding:@"UTF8"];
 
 	// Return success
 	return YES;

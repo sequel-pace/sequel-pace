@@ -31,10 +31,11 @@
 #import "SPDataStorage.h"
 #import "SPObjectAdditions.h"
 #import "SPPointerArrayAdditions.h"
-#import <SPMySQL/SPMySQLStreamingResultStore.h>
+#import "SPPostgresStreamingResultStore.h"
+#import "SPDebugLogger.h"
 #include <stdlib.h>
 #include <mach/mach_time.h>
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 @interface SPDataStorage ()
 
@@ -59,10 +60,10 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
  * Set the underlying MySQL data storage.
  * This will clear all edited rows and unloaded column tracking.
  */
-- (void) setDataStorage:(SPMySQLStreamingResultStore *)newDataStorage updatingExisting:(BOOL)updateExistingStore
+- (void) setDataStorage:(SPPostgresStreamingResultStore *)newDataStorage updatingExisting:(BOOL)updateExistingStore
 {
 	BOOL *oldUnloadedColumns;
-	SPMySQLStreamingResultStore *oldDataStorage;
+	SPPostgresStreamingResultStore *oldDataStorage;
 	
 	@synchronized(self) {
 		oldDataStorage = dataStorage;
@@ -91,19 +92,28 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 		unloadedColumns = newUnloadedColumns;
 		editedRowCount = 0;
 		editedRows = newEditedRows;
+
+		// Set delegate INSIDE synchronized block BEFORE checking dataDownloaded
+		// to prevent race condition where callback is missed
+		[newDataStorage setDelegate:self];
+
+		// For PostgreSQL, data is always loaded synchronously - check and callback immediately
+		// This must be inside @synchronized to ensure dataStorage ivar is set before callback
+		if ([newDataStorage dataDownloaded]) {
+			// Update edited rows to match loaded data
+			[editedRows setCount:(NSUInteger)[newDataStorage numberOfRows]];
+			editedRowCount = [editedRows count];
+		}
 	}
-	
+
 	free(oldUnloadedColumns);
-	
-	// the only delegate callback is resultStoreDidFinishLoadingData:.
-	// We can't set the delegate before exchanging the dataStorage ivar since then
-	// the message would come from an unknown object.
-	// But if we set it afterwards, we risk losing the callback event (since it could've
-	// happened in the meantime) - this is what the following if() is for.
-	[newDataStorage setDelegate:self];
-	
+
+	// Broadcast outside the synchronized block to avoid potential deadlock
+	// with code waiting on dataDownloadedLock while holding other locks
 	if ([newDataStorage dataDownloaded]) {
-		[self resultStoreDidFinishLoadingData:newDataStorage];
+		[dataDownloadedLock lock];
+		[dataDownloadedLock broadcast];
+		[dataDownloadedLock unlock];
 	}
 }
 
@@ -128,7 +138,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 		}
 		
 		// Otherwise, prepare to return the underlying storage row
-		NSMutableArray *dataArray = SPMySQLResultStoreGetRow(dataStorage, anIndex); //returned array is already a copy
+		NSMutableArray *dataArray = SPPostgresResultStoreGetRow(dataStorage, anIndex); //returned array is already a copy
 		
 		// Modify unloaded cells as appropriate
 		for (NSUInteger i = 0; i < numberOfColumns; i++) {
@@ -168,7 +178,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 		}
 
 		// Return the content
-		return SPMySQLResultStoreObjectAtRowAndColumn(dataStorage, rowIndex, columnIndex);
+		return SPPostgresResultStoreObjectAtRowAndColumn(dataStorage, rowIndex, columnIndex);
 	}
 }
 
@@ -204,7 +214,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 		}
 
 		// Return the content
-		return SPMySQLResultStorePreviewAtRowAndColumn(dataStorage, rowIndex, columnIndex, previewLength);
+		return SPPostgresResultStorePreviewAtRowAndColumn(dataStorage, rowIndex, columnIndex, previewLength);
 	}
 }
 
@@ -253,7 +263,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 	@synchronized(self) {
 		srcObject = (size_t)dataStorage ^ (size_t)editedRows ^ editedRowCount;
 		// If the start index is out of bounds, return 0 to indicate end of results
-		if (state->state >= SPMySQLResultStoreGetRowCount(dataStorage)) return 0;
+		if (state->state >= SPPostgresResultStoreGetRowCount(dataStorage)) return 0;
 
 		// If an edited row exists for the supplied index, use that; otherwise use the underlying
 		// storage row
@@ -265,7 +275,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 		}
 
 		if (targetRow == nil) {
-			targetRow = SPMySQLResultStoreGetRow(dataStorage, state->state); //returned array is already a copy
+			targetRow = SPPostgresResultStoreGetRow(dataStorage, state->state); //returned array is already a copy
 
 			// Modify unloaded cells as appropriate
 			for (NSUInteger i = 0; i < numberOfColumns; i++) {
@@ -323,7 +333,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 	NSMutableArray *newArray = [[NSMutableArray alloc] initWithArray:aRow];
 	@try {
 		@synchronized(self) {
-			unsigned long long numberOfRows = SPMySQLResultStoreGetRowCount(dataStorage);
+			unsigned long long numberOfRows = SPPostgresResultStoreGetRowCount(dataStorage);
 			
 			// Verify the row is of the correct length
 			[self _checkNewRow:newArray];
@@ -404,8 +414,8 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 {
 	@synchronized(self) {
 		// Throw an exception if the index is out of bounds
-		if (anIndex >= SPMySQLResultStoreGetRowCount(dataStorage)) {
-			[NSException raise:NSRangeException format:@"Requested storage index (%llu) beyond bounds (%llu)", (unsigned long long)anIndex, SPMySQLResultStoreGetRowCount(dataStorage)];
+		if (anIndex >= SPPostgresResultStoreGetRowCount(dataStorage)) {
+			[NSException raise:NSRangeException format:@"Requested storage index (%llu) beyond bounds (%llu)", (unsigned long long)anIndex, SPPostgresResultStoreGetRowCount(dataStorage)];
 		}
 
 		// Remove the row from the edited list and underlying storage
@@ -425,8 +435,8 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 {
 	@synchronized(self) {
 		// Throw an exception if the range is out of bounds
-		if (NSMaxRange(rangeToRemove) > SPMySQLResultStoreGetRowCount(dataStorage)) {
-			[NSException raise:NSRangeException format:@"Requested storage index (%llu) beyond bounds (%llu)", (unsigned long long)(NSMaxRange(rangeToRemove)), SPMySQLResultStoreGetRowCount(dataStorage)];
+		if (NSMaxRange(rangeToRemove) > SPPostgresResultStoreGetRowCount(dataStorage)) {
+			[NSException raise:NSRangeException format:@"Requested storage index (%llu) beyond bounds (%llu)", (unsigned long long)(NSMaxRange(rangeToRemove)), SPPostgresResultStoreGetRowCount(dataStorage)];
 		}
 
 		// Remove the rows from the edited list and underlying storage
@@ -501,9 +511,24 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 
 - (void) awaitDataDownloaded
 {
+	[SPDebugLogger log:@"[SYNC] awaitDataDownloaded entered, dataDownloaded=%d", [self dataDownloaded]];
 	[dataDownloadedLock lock];
-	while(![self dataDownloaded]) [dataDownloadedLock wait];
+
+	// Add timeout to prevent infinite deadlock (30 second timeout)
+	NSDate *timeoutDate = [NSDate dateWithTimeIntervalSinceNow:30.0];
+	while (![self dataDownloaded]) {
+		BOOL signaled = [dataDownloadedLock waitUntilDate:timeoutDate];
+		[SPDebugLogger log:@"[SYNC] Wait loop iteration, signaled=%d, dataDownloaded=%d", signaled, [self dataDownloaded]];
+		if (!signaled) {
+			// Timeout occurred - break out of wait to prevent deadlock
+			[SPDebugLogger log:@"[SYNC] TIMEOUT! awaitDataDownloaded timed out after 30 seconds"];
+			NSLog(@"SPDataStorage: awaitDataDownloaded timed out after 30 seconds");
+			break;
+		}
+	}
+
 	[dataDownloadedLock unlock];
+	[SPDebugLogger log:@"[SYNC] awaitDataDownloaded exiting"];
 }
 
 #pragma mark - Delegate callback methods
@@ -511,11 +536,13 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 /**
  * When the underlying result store finishes downloading, update the row store to match
  */
-- (void)resultStoreDidFinishLoadingData:(SPMySQLStreamingResultStore *)resultStore
+- (void)resultStoreDidFinishLoadingData:(SPPostgresStreamingResultStore *)resultStore
 {
+	[SPDebugLogger log:@"[SYNC] resultStoreDidFinishLoadingData called, broadcasting signal"];
 	@synchronized(self) {
 		if(resultStore != dataStorage) {
 			NSLog(@"%s: received delegate callback from an unknown result store %p (expected: %p). Ignored!", __PRETTY_FUNCTION__, resultStore, dataStorage);
+			[SPDebugLogger log:@"[SYNC] WARNING: Unknown result store, ignored"];
 			return;
 		}
 		[editedRows setCount:(NSUInteger)[resultStore numberOfRows]];
@@ -523,6 +550,7 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 	}
 	[dataDownloadedLock lock];
 	[dataDownloadedLock broadcast];
+	[SPDebugLogger log:@"[SYNC] Broadcast sent"];
 	[dataDownloadedLock unlock];
 }
 
@@ -563,6 +591,21 @@ static inline NSMutableArray* SPDataStorageGetEditedRow(NSPointerArray* rowStore
 // DO NOT CALL THIS METHOD UNLESS YOU CURRENTLY HAVE A LOCK ON SELF!!!
 - (void) _checkNewRow:(NSMutableArray *)aRow
 {
+	// PostgreSQL compatibility: if numberOfColumns is 0, auto-initialize from first row
+	if (numberOfColumns == 0 && [aRow count] > 0) {
+		numberOfColumns = [aRow count];
+		// Reallocate unloadedColumns array  
+		if (unloadedColumns) {
+			free(unloadedColumns);
+		}
+		unloadedColumns = calloc(numberOfColumns, sizeof(BOOL));
+		for (NSUInteger i = 0; i < numberOfColumns; i++) {
+			unloadedColumns[i] = NO;
+		}
+		NSLog(@"SPDataStorage: Auto-initialized numberOfColumns to %llu from first row", (unsigned long long)numberOfColumns);
+		return; // Skip validation since we just set it
+	}
+	
 	if ([aRow count] != numberOfColumns) {
 
         NSString *errString = [NSString stringWithFormat:@"New row length (%llu) does not match store column count (%llu)", (unsigned long long)[aRow count], (unsigned long long)numberOfColumns];

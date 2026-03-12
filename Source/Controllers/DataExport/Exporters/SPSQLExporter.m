@@ -38,7 +38,9 @@
 #import "SPExportController.h"
 #import "SPFunctions.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
+#import "SPPostgresStreamingResultStore.h"
+#import "SPPostgresGeometryData.h"
 #include <stdlib.h>
 
 @interface SPSQLExporter ()
@@ -153,8 +155,8 @@
         [metaString appendString:@"\xef\xbb\xbf"];
     }
 
-    // we require utf8mb4
-    [connection setEncoding:@"utf8mb4"];
+    // we require UTF8
+    [connection setEncoding:@"UTF8"];
 
     // Add the dump header to the dump file
     [metaString appendString:@"# ************************************************************\n"];
@@ -166,88 +168,24 @@
     [metaString appendFormat:@"# %@: %@\n", NSLocalizedString(@"Generation Time", @"export header generation time label"), [NSDate date]];
     [metaString appendString:@"# ************************************************************\n\n\n"];
 
-    // Add commands to store the client encodings used when importing and set to UTF8mb4 to preserve data
-    [metaString appendString:@"/*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;\n"];
-    [metaString appendString:@"/*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;\n"];
-    [metaString appendString:@"/*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;\n"];
-    [metaString appendString:@"SET NAMES utf8mb4;\n"];
+    // PostgreSQL: Set client encoding to UTF8
+    [metaString appendString:@"SET client_encoding = 'UTF8';\n"];
 
-    [metaString appendString:@"/*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;\n"];
+    // PostgreSQL: Disable foreign key checks by setting session_replication_role
+    // This is the PostgreSQL equivalent of MySQL's FOREIGN_KEY_CHECKS=0
+    [metaString appendString:@"SET session_replication_role = 'replica';\n"];
 
-    /* A note on SQL_MODE:
-     *
-     *   BEFORE 3.23.6
-     *     No supported
-     *
-     *   FROM 3.23.6
-     *     There is a "--ansi" / "-a" CLI argument to mysqld, which is the predecessor to SQL_MODE.
-     *     It can be queried via "SHOW VARIABLES" -> "ansi_mode" = "OFF" | "ON"
-     *
-     *   FROM 3.23.41
-     *     There is a "--sql-mode=[opt[,opt[...]]]" CLI argument to mysqld.
-     *     It can be queried via "SHOW VARIABLES" -> "sql_mode" but the result will be a bitfield value with
-     *         #define MODE_REAL_AS_FLOAT        1 = "REAL_AS_FLOAT"
-     *         #define MODE_PIPES_AS_CONCAT      2 = "PIPES_AS_CONCAT"
-     *         #define MODE_ANSI_QUOTES          4 = "ANSI_QUOTES"
-     *         #define MODE_IGNORE_SPACE         8 = "IGNORE_SPACE"
-     *         #define MODE_SERIALIZABLE        16 = "SERIALIZE" (!)
-     *         #define MODE_ONLY_FULL_GROUP_BY  32 = "ONLY_FULL_GROUP_BY"
-     *     The "--ansi" switch is still supported but mostly equivalent to setting all of the options above
-     *     (it will also set the transaction isolation level to SERIALIZABLE).
-     *     "ansi_mode" is no longer returned by SHOW VARIABLES.
-     *
-     *   FROM 4.1.0
-     *     - "sql_mode" can be changed at runtime (global or per session).
-     *     - "SHOW VARIABLES" now returns a CSV list of named options
-     *
-     *   FROM 4.1.1
-     *     - "SERIALIZE" is no longer supported (must be changed via "SET TRANSACTION ISOLATION LEVEL")
-     *       (trivia: internally it has become MODE_NOT_USED: 16 = "?")
-     *
-     */
-
-    //fetch old sql mode to restore it later
-    {
-        SPMySQLResult *result = [connection queryString:@"SHOW VARIABLES LIKE 'sql_mode'"];
-        if(![connection queryErrored]) {
-            [result setReturnDataAsStrings:YES];
-            NSArray *row = [result getRowAsArray];
-            oldSqlMode = [[row objectAtIndex:1] unboxNull];
-            SPLog(@"oldSqlMode: %@", oldSqlMode);
-        }
-    }
-    //set sql mode for export
-    if([@"" isEqualToString:oldSqlMode]) {
-        // the current sql_mode is already the one we want (empty string), no need to change+revert it
-        oldSqlMode = nil;
-    }
-    else {
-        [connection queryString:@"SET SQL_MODE=''"]; //mysqldump uses a conditional comment for 40100 here, but we want to see the error, since it can't simply be ignored (also ANSI mode is supported before 4.1)
-        if ([connection queryErrored]) {
-            [errors appendFormat:@"%@ (%@)\n", NSLocalizedString(@"The server's SQL_MODE could not be changed to one suitable for export. The export may be missing important details or may not be importable at all!", @"sql export : 'set @@sql_mode' query failed message"), [connection lastErrorMessage]];
-            [metaString appendFormat:@"# SET SQL_MODE Error: %@\n\n\n", [connection lastErrorMessage]];
-            //if we couldn't change it, we don't need to restore it either
-            oldSqlMode = nil;
-        }
-    }
-    // * There is no point in writing out that the file should use a specific SQL mode when we don't even know which one was active during export.
-    // * Triggers, procs/funcs have their own SQL_MODE which is still set/reset below, though.
-    //
-    // But an unknown SQL_MODE could perhaps still affect how MySQL returns the "SHOW CREATE…"
-    // data for those objects (like it does for "SHOW CREATE TABLE") possibly rendering them invalid (need to check that),
-    // so it may be better to flat out refuse to export schema object DDL if we don't have a valid sql_mode.
-
-
-    // JCS Note: per docs: https://dev.mysql.com/doc/refman/8.0/en/sql-mode.html#sqlmode_no_auto_value_on_zero
-    // For example, if you dump the table with mysqldump and then reload it, MySQL normally generates new sequence numbers when it encounters the 0 values,
-    // resulting in a table with contents different from the one that was dumped. Enabling NO_AUTO_VALUE_ON_ZERO before reloading the dump file solves this problem.
+    // PostgreSQL doesn't use SQL_MODE like MySQL
+    // No configuration changes needed for PostgreSQL export
+    oldSqlMode = nil;
     // For this reason, mysqldump automatically includes in its output a statement that enables NO_AUTO_VALUE_ON_ZERO.
     //
     // so to address issue #865, where creating a table with a trigger discards NO_AUTO_VALUE_ON_ZERO,
     // by setting SESSION SQL_MODE to the mode used when the trigger was created then resetting SQL_MODE to @OLD_SQL_MODE
     // we add NO_AUTO_VALUE_ON_ZERO to @OLD_SQL_MODE here, for the export file to properly work.
-    [metaString appendString:@"/*!40101 SET @OLD_SQL_MODE='NO_AUTO_VALUE_ON_ZERO', SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;\n"];
-    [metaString appendString:@"/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\n\n\n"];
+    // Postgres doesn't use SQL_MODE like MySQL.
+    // [metaString appendString:@"/*!40101 SET @OLD_SQL_MODE='NO_AUTO_VALUE_ON_ZERO', SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;\n"];
+    // [metaString appendString:@"/*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;\n\n\n"];
 
     [self writeString:metaString];
 
@@ -292,35 +230,111 @@
 
             id createTableSyntax = nil;
             SPTableType tableType = SPTableTypeTable;
-            // Determine whether this table is a table or a view via the CREATE TABLE command, and keep the create table syntax
+            // Determine whether this table is a table or a view, and generate the CREATE syntax
             {
-                SPMySQLResult *queryResult = [connection queryString:[NSString stringWithFormat:@"SHOW CREATE TABLE %@", [tableName backtickQuotedString]]];
+                // PostgreSQL: First check if this is a view
+                SPPostgresResult *viewCheck = [connection queryString:[NSString stringWithFormat:
+                    @"SELECT pg_get_viewdef(%@, true) AS view_def FROM pg_views WHERE viewname = %@",
+                    [tableName tickQuotedString], [tableName tickQuotedString]]];
+                [viewCheck setReturnDataAsStrings:YES];
 
-                [queryResult setReturnDataAsStrings:YES];
-
-                if ([queryResult numberOfRows]) {
-                    NSDictionary *tableDetails = [[NSDictionary alloc] initWithDictionary:[queryResult getRowAsDictionary]];
-
-                    if ([tableDetails objectForKey:@"Create View"]) {
+                if ([viewCheck numberOfRows] > 0) {
+                    // This is a view
+                    NSDictionary *viewRow = [viewCheck getRowAsDictionary];
+                    NSString *viewDef = [viewRow objectForKey:@"view_def"];
+                    if (viewDef && ![viewDef isNSNull]) {
+                        NSString *createViewSyntax = [NSString stringWithFormat:@"CREATE VIEW %@ AS\n%@", [tableName postgresQuotedIdentifier], viewDef];
                         [viewSyntaxes
                             setValue: [NSString stringWithFormat:@"%@%@",
-                                            (sqlOutputIncludeDropSyntax ? [NSString stringWithFormat:@"DROP TABLE IF EXISTS %@; DROP VIEW IF EXISTS %@;\n\n", [tableName backtickQuotedString], [tableName backtickQuotedString]] : @""),
-                                            [[[tableDetails objectForKey:@"Create View"] copy] createViewSyntaxPrettifier]]
+                                            (sqlOutputIncludeDropSyntax ? [NSString stringWithFormat:@"DROP TABLE IF EXISTS %@; DROP VIEW IF EXISTS %@;\n\n", [tableName postgresQuotedIdentifier], [tableName postgresQuotedIdentifier]] : @""),
+                                            createViewSyntax]
                             forKey: tableName
                         ];
                         createTableSyntax = [self _createViewPlaceholderSyntaxForView:tableName];
                         tableType = SPTableTypeView;
                     }
-                    else {
-                        createTableSyntax = [[tableDetails objectForKey:@"Create Table"] copy];
+                }
+                else {
+                    // This is a table - build CREATE TABLE from information_schema
+                    NSString *columnsQuery = [NSString stringWithFormat:
+                        @"SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, "
+                        @"is_nullable, column_default "
+                        @"FROM information_schema.columns "
+                        @"WHERE table_schema = 'public' AND table_name = %@ "
+                        @"ORDER BY ordinal_position", [tableName tickQuotedString]];
+
+                    SPPostgresResult *columnsResult = [connection queryString:columnsQuery];
+                    [columnsResult setReturnDataAsStrings:YES];
+
+                    if ([columnsResult numberOfRows] > 0) {
+                        NSMutableString *createStmt = [NSMutableString stringWithFormat:@"CREATE TABLE %@ (\n", [tableName postgresQuotedIdentifier]];
+                        NSMutableArray *columnDefs = [NSMutableArray array];
+
+                        for (NSDictionary *row in columnsResult) {
+                            NSMutableString *colDef = [NSMutableString stringWithFormat:@"  %@", [[row objectForKey:@"column_name"] postgresQuotedIdentifier]];
+
+                            NSString *dataType = [row objectForKey:@"data_type"];
+                            id maxLength = [row objectForKey:@"character_maximum_length"];
+                            id numericPrecision = [row objectForKey:@"numeric_precision"];
+                            id numericScale = [row objectForKey:@"numeric_scale"];
+
+                            if (maxLength && ![maxLength isKindOfClass:[NSNull class]]) {
+                                [colDef appendFormat:@" %@(%@)", dataType, maxLength];
+                            } else if (numericPrecision && ![numericPrecision isKindOfClass:[NSNull class]] &&
+                                       numericScale && ![numericScale isKindOfClass:[NSNull class]]) {
+                                [colDef appendFormat:@" %@(%@,%@)", dataType, numericPrecision, numericScale];
+                            } else {
+                                [colDef appendFormat:@" %@", dataType];
+                            }
+
+                            id isNullable = [row objectForKey:@"is_nullable"];
+                            BOOL isNotNullable = NO;
+                            if ([isNullable isKindOfClass:[NSString class]]) {
+                                isNotNullable = [isNullable isEqualToString:@"NO"];
+                            } else if ([isNullable isKindOfClass:[NSNumber class]]) {
+                                isNotNullable = ![isNullable boolValue];
+                            }
+                            if (isNotNullable) {
+                                [colDef appendString:@" NOT NULL"];
+                            }
+
+                            id defaultValue = [row objectForKey:@"column_default"];
+                            if (defaultValue && ![defaultValue isKindOfClass:[NSNull class]] && [defaultValue length]) {
+                                [colDef appendFormat:@" DEFAULT %@", defaultValue];
+                            }
+
+                            [columnDefs addObject:colDef];
+                        }
+
+                        // Add primary key constraint if exists
+                        NSString *pkQuery = [NSString stringWithFormat:
+                            @"SELECT string_agg(kcu.column_name, ', ') AS pk_columns "
+                            @"FROM information_schema.table_constraints tc "
+                            @"JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name "
+                            @"WHERE tc.table_name = %@ AND tc.constraint_type = 'PRIMARY KEY' "
+                            @"GROUP BY tc.constraint_name", [tableName tickQuotedString]];
+                        SPPostgresResult *pkResult = [connection queryString:pkQuery];
+                        [pkResult setReturnDataAsStrings:YES];
+                        if ([pkResult numberOfRows] > 0) {
+                            NSDictionary *pkRow = [pkResult getRowAsDictionary];
+                            NSString *pkColumns = [pkRow objectForKey:@"pk_columns"];
+                            if (pkColumns && ![pkColumns isNSNull]) {
+                                [columnDefs addObject:[NSString stringWithFormat:@"  PRIMARY KEY (%@)", pkColumns]];
+                            }
+                        }
+
+                        [createStmt appendString:[columnDefs componentsJoinedByString:@",\n"]];
+                        [createStmt appendString:@"\n)"];
+
+                        createTableSyntax = createStmt;
                         tableType = SPTableTypeTable;
                     }
                 }
 
                 if ([connection queryErrored]) {
-                    [errors appendFormat:@"%@\n", [connection lastErrorMessage]];
+                    [errors appendFormat:@"%@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 
-                    [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n\n\n", [connection lastErrorMessage]]];
+                    [self writeUTF8String:[NSString stringWithFormat:@"-- Error: %@\n\n\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
 
                     continue;
                 }
@@ -335,14 +349,14 @@
 
             // Add a 'DROP TABLE' command if required
             if (sqlOutputIncludeDropSyntax && tableType == SPTableTypeTable) {
-                [self writeString:[NSString stringWithFormat:@"DROP %@ IF EXISTS %@;\n\n", ((tableType == SPTableTypeTable) ? @"TABLE" : @"VIEW"), [tableName backtickQuotedString]]];
+                [self writeString:[NSString stringWithFormat:@"DROP %@ IF EXISTS %@;\n\n", ((tableType == SPTableTypeTable) ? @"TABLE" : @"VIEW"), [tableName postgresQuotedIdentifier]]];
             }
 
             // Add the create syntax for the table if specified in the export dialog
             if (sqlOutputIncludeStructure && createTableSyntax && tableType == SPTableTypeTable) {
 
                 if ([createTableSyntax isKindOfClass:[NSData class]]) {
-#warning This doesn't make sense. If the NSData really contains a string it would be in utf8, utf8mb4 or a mysql pre-4.1 legacy charset, but not in the export output charset. This whole if() is likely a side effect of the BINARY flag confusion (#2700)
+#warning This doesn't make sense. If the NSData really contains a string it would be in utf8, UTF8 or a mysql pre-4.1 legacy charset, but not in the export output charset. This whole if() is likely a side effect of the BINARY flag confusion (#2700)
                     createTableSyntax = [[NSString alloc] initWithData:createTableSyntax encoding:[self exportOutputEncoding]];
                 }
 
@@ -413,21 +427,21 @@
                         [rawColumnNames addObject:[theColumnDetail objectForKey:@"name"]];
 
                         if (useRawHexDataForColumnAtIndex[jj]) {
-                            [queryColumnDetails addObject:[NSString stringWithFormat:@"HEX(%@)", [[theColumnDetail objectForKey:@"name"] mySQLBacktickQuotedString]]];
+                            [queryColumnDetails addObject:[NSString stringWithFormat:@"HEX(%@)", [[theColumnDetail objectForKey:@"name"] postgresQuotedIdentifier]]];
                         }
                         else {
-                            [queryColumnDetails addObject:[[theColumnDetail objectForKey:@"name"] mySQLBacktickQuotedString]];
+                            [queryColumnDetails addObject:[[theColumnDetail objectForKey:@"name"] postgresQuotedIdentifier]];
                         }
                         jj++;
                     }
                 }
 
                 // Retrieve the number of rows in the table for progress bar drawing
-                NSArray *rowArray = [[connection queryString:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [tableName backtickQuotedString]]] getRowAsArray];
+                NSArray *rowArray = [[connection queryString:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [tableName postgresQuotedIdentifier]]] getRowAsArray];
 
                 if ([connection queryErrored] || ![rowArray count]) {
-                    [errors appendFormat:@"%@\n", [connection lastErrorMessage]];
-                    [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n\n\n", [connection lastErrorMessage]]];
+                    [errors appendFormat:@"%@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
+                    [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n\n\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
                     free(useRawDataForColumnAtIndex);
                     free(useRawHexDataForColumnAtIndex);
                     continue;
@@ -437,7 +451,7 @@
 
                 if (rowCount) {
                     // Set up a result set in streaming mode
-                    SPMySQLStreamingResult *streamingResult = [connection streamingQueryString:[NSString stringWithFormat:@"SELECT %@ FROM %@", [queryColumnDetails componentsJoinedByString:@", "], [tableName backtickQuotedString]] useLowMemoryBlockingStreaming:([self exportUsingLowMemoryBlockingStreaming])];
+                    SPPostgresStreamingResult *streamingResult = [connection streamingQueryString:[NSString stringWithFormat:@"SELECT %@ FROM %@", [queryColumnDetails componentsJoinedByString:@", "], [tableName postgresQuotedIdentifier]] useLowMemoryBlockingStreaming:([self exportUsingLowMemoryBlockingStreaming])];
 
                     // Inform the delegate that we are about to start writing data for the current table
                     [delegate performSelectorOnMainThread:@selector(sqlExportProcessWillBeginWritingData:) withObject:self waitUntilDone:NO];
@@ -446,12 +460,12 @@
 
                     // Lock the table for writing and disable keys if supported
                     [metaString setString:@""];
-                    [metaString appendFormat:@"LOCK TABLES %@ WRITE;\n/*!40000 ALTER TABLE %@ DISABLE KEYS */;\n\n", [tableName backtickQuotedString], [tableName backtickQuotedString]];
+                    [metaString appendFormat:@"LOCK TABLE %@ IN EXCLUSIVE MODE;\n", [tableName postgresQuotedIdentifier]];
 
                     [self writeString:metaString];
 
                     // Construct the start of the insertion command
-                    [self writeUTF8String:[NSString stringWithFormat:@"INSERT INTO %@ (%@)\nVALUES", [tableName backtickQuotedString], [rawColumnNames componentsJoinedAndBacktickQuoted]]];
+                    [self writeUTF8String:[NSString stringWithFormat:@"INSERT INTO %@ (%@)\nVALUES", [tableName postgresQuotedIdentifier], [rawColumnNames componentsJoinedAndBacktickQuoted]]];
 
                     // Iterate through the rows to construct a VALUES group for each
                     NSUInteger rowsWrittenForTable = 0;
@@ -499,7 +513,7 @@
                             (([self sqlInsertDivider] == SPSQLInsertEveryNRows) && (rowsWrittenForCurrentStmt == [self sqlInsertAfterNValue])))
                         {
                             [sqlString setString:@";\n\nINSERT INTO "];
-                            [sqlString appendString:[tableName backtickQuotedString]];
+                            [sqlString appendString:[tableName postgresQuotedIdentifier]];
                             [sqlString appendString:@" ("];
                             [sqlString appendString:[rawColumnNames componentsJoinedAndBacktickQuoted]];
                             [sqlString appendString:@")\nVALUES\n\t("];
@@ -541,7 +555,7 @@
                             }
 
                             // GEOMETRY data types directly as hex data
-                            else if ([object isKindOfClass:[SPMySQLGeometryData class]]) {
+                            else if ([object isKindOfClass:[SPPostgresGeometryData class]]) {
                                 [sqlString appendString:[connection escapeAndQuoteData:[object data]]];
                             }
 
@@ -598,7 +612,7 @@
 
                     // Unlock the table and re-enable keys if supported
                     [metaString setString:@""];
-                    [metaString appendFormat:@"/*!40000 ALTER TABLE %@ ENABLE KEYS */;\nUNLOCK TABLES;\n", [tableName backtickQuotedString]];
+                    [metaString appendFormat:@"-- UNLOCK TABLE %@;\n", [tableName postgresQuotedIdentifier]];
 
                     [self writeUTF8String:metaString];
 
@@ -609,24 +623,29 @@
                 free(useRawHexDataForColumnAtIndex);
 
                 if ([connection queryErrored]) {
-                    [errors appendFormat:@"%@\n", [connection lastErrorMessage]];
+                    [errors appendFormat:@"%@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 
                     if ([self sqlOutputIncludeErrors]) {
-                        [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage]]];
+                        [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
                     }
                 }
             }
 
             // Add triggers if the structure export was enabled
             if (sqlOutputIncludeStructure) {
-                SPMySQLResult *queryResult = [connection queryString:[NSString stringWithFormat:@"/*!50003 SHOW TRIGGERS WHERE `Table` = %@ */", [tableName tickQuotedString]]];
+                // PostgreSQL: Query triggers from information_schema
+                SPPostgresResult *queryResult = [connection queryString:[NSString stringWithFormat:
+                    @"SELECT trigger_name, event_manipulation, action_timing, action_statement "
+                    @"FROM information_schema.triggers "
+                    @"WHERE event_object_table = %@ AND trigger_schema = 'public'",
+                    [tableName tickQuotedString]]];
 
                 [queryResult setReturnDataAsStrings:YES];
 
                 if ([queryResult numberOfRows]) {
 
                     [metaString setString:@"\n"];
-                    [metaString appendString:@"DELIMITER ;;\n"];
+                    [metaString appendString:@"-- Triggers\n"];
 
                     for (NSUInteger s = 0; s < [queryResult numberOfRows]; s++)
                     {
@@ -646,30 +665,25 @@
 
                         NSDictionary *triggers = [[NSDictionary alloc] initWithDictionary:[queryResult getRowAsDictionary]];
 
-                        // Definer is user@host but we need to escape it to `user`@`host`
-                        NSArray *triggersDefiner = [[triggers objectForKey:@"Definer"] componentsSeparatedByString:@"@"];
-
-                        [metaString appendFormat:@"/*!50003 SET SESSION SQL_MODE=\"%@\" */;;\n/*!50003 CREATE */ ", [triggers objectForKey:@"sql_mode"]];
-                        [metaString appendFormat:@"/*!50017 DEFINER=%@@%@ */ /*!50003 TRIGGER %@ %@ %@ ON %@ FOR EACH ROW %@ */;;\n",
-                         [[triggersDefiner firstObject] backtickQuotedString],
-                         [[triggersDefiner safeObjectAtIndex:1] backtickQuotedString],
-                         [[triggers objectForKey:@"Trigger"] backtickQuotedString],
-                         [triggers objectForKey:@"Timing"],
-                         [triggers objectForKey:@"Event"],
-                         [[triggers objectForKey:@"Table"] backtickQuotedString],
-                         [triggers objectForKey:@"Statement"]];
+                        // PostgreSQL trigger format
+                        [metaString appendFormat:@"CREATE TRIGGER %@ %@ %@ ON %@ FOR EACH ROW %@;\n",
+                         [[triggers objectForKey:@"trigger_name"] postgresQuotedIdentifier],
+                         [triggers objectForKey:@"action_timing"],
+                         [triggers objectForKey:@"event_manipulation"],
+                         [tableName postgresQuotedIdentifier],
+                         [triggers objectForKey:@"action_statement"]];
                     }
 
-                    [metaString appendString:@"DELIMITER ;\n/*!50003 SET SESSION SQL_MODE=@OLD_SQL_MODE */;\n"];
+                    [metaString appendString:@"\n"];
 
                     [self writeUTF8String:metaString];
                 }
 
                 if ([connection queryErrored]) {
-                    [errors appendFormat:@"%@\n", [connection lastErrorMessage]];
+                    [errors appendFormat:@"%@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 
                     if ([self sqlOutputIncludeErrors]) {
-                        [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage]]];
+                        [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
                     }
                 }
             }
@@ -731,17 +745,22 @@
 
         if ([items count] == 0) continue;
 
-        // Retrieve the definitions
-        SPMySQLResult *queryResult = [connection queryString:[NSString stringWithFormat:@"/*!50003 SHOW %@ STATUS WHERE `Db` = %@ */", procedureType,
-                                                              [[self sqlDatabaseName] tickQuotedString]]];
+        // Retrieve the definitions from PostgreSQL
+        // PostgreSQL: Query pg_proc for function/procedure definitions
+        NSString *prokind = [procedureType isEqualToString:@"PROCEDURE"] ? @"p" : @"f";
+        SPPostgresResult *queryResult = [connection queryString:[NSString stringWithFormat:
+            @"SELECT p.proname AS \"Name\", pg_get_functiondef(p.oid) AS definition "
+            @"FROM pg_proc p "
+            @"JOIN pg_namespace n ON p.pronamespace = n.oid "
+            @"WHERE n.nspname = 'public' AND p.prokind = '%@'", prokind]];
 
         [queryResult setReturnDataAsStrings:YES];
 
         if ([queryResult numberOfRows]) {
 
             [metaString setString:@"\n"];
-            [metaString appendFormat:@"--\n-- Dumping routines (%@) for database %@\n--\nDELIMITER ;;\n\n", procedureType,
-             [[self sqlDatabaseName] tickQuotedString]];
+            [metaString appendFormat:@"--\n-- Dumping routines (%@) for database %@\n--\n\n", procedureType,
+             [[self sqlDatabaseName] postgresQuotedIdentifier]];
 
             // Loop through the definitions, exporting if enabled
             for (NSUInteger s = 0; s < [queryResult numberOfRows]; s++) {
@@ -794,12 +813,12 @@
                     }
 
                     if (sqlOutputIncludeStructure || sqlOutputIncludeDropSyntax)
-                        [metaString appendFormat:@"# Dump of %@ %@\n# ------------------------------------------------------------\n\n", procedureType, procedureName];
+                        [metaString appendFormat:@"-- Dump of %@ %@\n-- ------------------------------------------------------------\n\n", procedureType, procedureName];
 
                     // Add the 'DROP' command if required
                     if (sqlOutputIncludeDropSyntax) {
-                        [metaString appendFormat:@"/*!50003 DROP %@ IF EXISTS %@ */;;\n", procedureType,
-                         [procedureName backtickQuotedString]];
+                        [metaString appendFormat:@"DROP %@ IF EXISTS %@;\n", procedureType,
+                         [procedureName postgresQuotedIdentifier]];
                     }
 
                     // Only continue if the 'CREATE SYNTAX' is required
@@ -807,79 +826,31 @@
                         continue;
                     }
 
-                    // Definer is user@host but we need to escape it to `user`@`host`
-                    NSArray *procedureDefiner = [[proceduresList objectForKey:@"Definer"] componentsSeparatedByString:@"@"];
-
-                    NSString *escapedDefiner = [NSString stringWithFormat:@"%@@%@",
-                                                [[procedureDefiner firstObject] backtickQuotedString],
-                                                [[procedureDefiner safeObjectAtIndex:1] backtickQuotedString]];
-
-                    SPMySQLResult *createProcedureResult = [connection queryString:[NSString stringWithFormat:@"/*!50003 SHOW CREATE %@ %@ */", procedureType,
-                                                                                    [procedureName backtickQuotedString]]];
-                    [createProcedureResult setReturnDataAsStrings:YES];
-                    if ([connection queryErrored]) {
-                        [errors appendFormat:@"%@\n", [connection lastErrorMessage]];
-
-                        if ([self sqlOutputIncludeErrors]) {
-                            [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage]]];
-                        }
-                        continue;
+                    // Get the function definition directly from the query result
+                    NSString *functionDef = [proceduresList objectForKey:@"definition"];
+                    if (functionDef && ![functionDef isNSNull]) {
+                        [metaString appendFormat:@"%@;\n\n", functionDef];
                     }
-
-                    NSDictionary *procedureInfo = [[NSDictionary alloc] initWithDictionary:[createProcedureResult getRowAsDictionary]];
-
-                    [metaString appendFormat:@"/*!50003 SET SESSION SQL_MODE=\"%@\"*/;;\n", [procedureInfo objectForKey:@"sql_mode"]];
-
-                    NSString *createProcedure = [procedureInfo objectForKey:[NSString stringWithFormat:@"Create %@", [procedureType capitalizedString]]];
-
-                    // A NULL result indicates a permission problem
-                    if ([createProcedure isNSNull]) {
-                        NSString *errorString = [NSString stringWithFormat:NSLocalizedString(@"Could not export the %@ '%@' because of a permissions error.\n", @"Procedure/function export permission error"), procedureType, procedureName];
-                        [errors appendString:errorString];
-                        if ([self sqlOutputIncludeErrors]) {
-                            [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", errorString]];
-                        }
-                        continue;
-                    }
-
-                    NSRange procedureRange    = [createProcedure rangeOfString:procedureType options:NSCaseInsensitiveSearch];
-                    NSString *procedureBody   = [createProcedure substringFromIndex:procedureRange.location];
-
-                    // /*!50003 CREATE*/ /*!50020 DEFINER=`sequelpro`@`%`*/ /*!50003 PROCEDURE `p`()
-                    // 													  BEGIN
-                    // 													  /* This procedure does nothing */
-                    // END */;;
-                    //
-                    // Build the CREATE PROCEDURE string to include MySQL Version limiters
-                    [metaString appendFormat:@"/*!50003 CREATE*/ /*!50020 DEFINER=%@*/ /*!50003 %@ */;;\n\n/*!50003 SET SESSION SQL_MODE=@OLD_SQL_MODE */;;\n", escapedDefiner, procedureBody];
 
                 }
             }
-
-            [metaString appendString:@"DELIMITER ;\n"];
 
             [self writeUTF8String:metaString];
         }
 
         if ([connection queryErrored]) {
-            [errors appendFormat:@"%@\n", [connection lastErrorMessage]];
+            [errors appendFormat:@"%@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 
             if ([self sqlOutputIncludeErrors]) {
-                [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage]]];
+                [self writeUTF8String:[NSString stringWithFormat:@"# Error: %@\n", [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
             }
         }
     }
 
-    // Restore unique checks, foreign key checks, and other settings saved at the start
+    // PostgreSQL: Restore session settings
     [metaString setString:@"\n"];
-    [metaString appendString:@"/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;\n"];
-    [metaString appendString:@"/*!40101 SET SQL_MODE=@OLD_SQL_MODE */;\n"];
-    [metaString appendString:@"/*!40014 SET FOREIGN_KEY_CHECKS=@OLD_FOREIGN_KEY_CHECKS */;\n"];
-
-    // Restore the client encoding to the original encoding before import
-    [metaString appendString:@"/*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;\n"];
-    [metaString appendString:@"/*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;\n"];
-    [metaString appendString:@"/*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;\n"];
+    // Re-enable foreign key checks
+    [metaString appendString:@"SET session_replication_role = 'origin';\n"];
 
     // Write footer-type information to the file
     [self writeUTF8String:metaString];
@@ -900,9 +871,7 @@
 }
 
 - (void)endCleanup:(NSString *)oldSqlMode {
-    if(oldSqlMode) {
-        [connection queryString:[NSString stringWithFormat:@"SET SQL_MODE=%@",[oldSqlMode tickQuotedString]]];
-    }
+    // PostgreSQL doesn't use SQL_MODE, nothing to restore
 }
 
 /**
@@ -936,7 +905,7 @@
     NSArray *viewColumns = [viewInformation objectForKey:@"columns"];
 
     // Set up the start of the placeholder string and initialise an empty field string
-    placeholderSyntax = [[NSMutableString alloc] initWithFormat:@"CREATE TABLE %@ (\n", [viewName backtickQuotedString]];
+    placeholderSyntax = [[NSMutableString alloc] initWithFormat:@"CREATE TABLE %@ (\n", [viewName postgresQuotedIdentifier]];
 
 
     // Loop through the columns, creating an appropriate column definition for each and appending it to the syntax string
@@ -944,7 +913,7 @@
         @autoreleasepool {
             NSDictionary *column = [viewColumns safeObjectAtIndex:i];
 
-            NSMutableString *fieldString = [[NSMutableString alloc] initWithString:[[column objectForKey:@"name"] backtickQuotedString]];
+            NSMutableString *fieldString = [[NSMutableString alloc] initWithString:[[column objectForKey:@"name"] postgresQuotedIdentifier]];
 
             // Add the type and length information as appropriate
             if ([column objectForKey:@"length"]) {
@@ -972,10 +941,8 @@
                 [fieldString appendFormat:@" %@", [column objectForKey:@"type"]];
             }
 
-            // Field specification details
-            if ([[column objectForKey:@"unsigned"] integerValue] == 1) [fieldString appendString:@" UNSIGNED"];
-            if ([[column objectForKey:@"zerofill"] integerValue] == 1) [fieldString appendString:@" ZEROFILL"];
-            if ([[column objectForKey:@"binary"] integerValue] == 1) [fieldString appendString:@" BINARY"];
+            // PostgreSQL doesn't support UNSIGNED, ZEROFILL, or BINARY column modifiers
+            // These MySQL-specific attributes are intentionally not exported for PostgreSQL compatibility
             if ([[column objectForKey:@"null"] integerValue] == 0) {
                 [fieldString appendString:@" NOT NULL"];
             } else {

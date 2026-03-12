@@ -29,20 +29,20 @@
 //  More info at <https://github.com/sequelpro/sequelpro>
 
 @class SPTablesList;
-@class SPMySQLConnection;
 @class SPCreateDatabaseInfo;
+@class SPPostgresConnection;
 
 @interface SPDatabaseAction : NSObject 
 {
 	NSWindow *messageWindow;
 	SPTablesList *tablesList;
-	SPMySQLConnection *connection;
+	SPPostgresConnection *connection;
 }
 
 /**
- * @property connection References the SPMySQL.framework MySQL connection; it has to be set.
+ * @property connection References the SPPostgresFramework PostgreSQL connection; it has to be set.
  */
-@property (nonnull, readwrite, strong) SPMySQLConnection *connection;
+@property (nonnull, readwrite, strong) SPPostgresConnection *connection;
 
 /**
  * @property tablesList

@@ -35,7 +35,7 @@
 @class SPDatabaseDocument;
 @class SPTablesList;
 @class SPCustomQuery;
-@class SPMySQLConnection;
+@class SPPostgresConnection;
 @class SPCopyTable;
 @class NoodleLineNumberView;
 
@@ -68,14 +68,14 @@ typedef struct {
 	
 	BOOL textBufferSizeIncreased;
 
-	NSString *showMySQLHelpFor;
+	NSString *showPostgresHelpFor;
 	
 	IBOutlet NSScrollView *scrollView;
 	SPNarrowDownCompletion *completionPopup;
 
 	NSUserDefaults *prefs;
 
-	SPMySQLConnection *mySQLConnection;
+	SPPostgresConnection *postgresConnection;
 	NSInteger mySQLmajorVersion;
 
 	SnippetControlInfo snippetControlArray[20];
@@ -125,7 +125,7 @@ typedef struct {
 @property (assign) BOOL completionWasReinvokedAutomatically;
 @property (assign) BOOL completionFuzzyMode;
 
-- (IBAction)showMySQLHelpForCurrentWord:(id)sender;
+- (IBAction)showPostgresHelpForCurrentWord:(id)sender;
 
 - (BOOL) isNextCharMarkedBy:(id)attribute withValue:(id)aValue;
 - (BOOL) areAdjacentCharsLinked;
@@ -150,7 +150,7 @@ typedef struct {
 - (NSUInteger) getLineNumberForCharacterIndex:(NSUInteger)anIndex;
 - (void) autoHelp;
 - (NSBezierPath*)roundedBezierPathAroundRange:(NSRange)aRange;
-- (void) setConnection:(SPMySQLConnection *)theConnection withVersion:(NSInteger)majorVersion;
+- (void) setConnection:(SPPostgresConnection *)theConnection withVersion:(NSInteger)majorVersion;
 - (void) doCompletionByUsingSpellChecker:(BOOL)isDictMode fuzzyMode:(BOOL)fuzzySearch autoCompleteMode:(BOOL)autoCompleteMode;
 - (void) doAutoCompletion;
 - (void) refreshCompletion;

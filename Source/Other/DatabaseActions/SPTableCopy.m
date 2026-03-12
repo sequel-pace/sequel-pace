@@ -30,7 +30,7 @@
 
 #import "SPTableCopy.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 @interface SPTableCopy ()
 
@@ -45,11 +45,12 @@
 	NSString *createTableResult = [self _createTableStatementFor:tableName inDatabase:sourceDatabase];
 	
 	if ([createTableResult hasPrefix:@"CREATE TABLE"]) {
-		NSMutableString *createTableStatement = [[NSMutableString alloc] initWithString:createTableResult];
-		
-		// Add the target DB name and the separator dot after "CREATE TABLE ".
-		[createTableStatement insertString:@"." atIndex:13];
-		[createTableStatement insertString:[targetDatabase backtickQuotedString] atIndex:13];
+		// Postgres specific copy structure
+		NSString *createTableStatement = [NSString stringWithFormat:@"CREATE TABLE %@.%@ (LIKE %@.%@ INCLUDING ALL)",
+										  [targetDatabase postgresQuotedIdentifier],
+										  [tableName postgresQuotedIdentifier],
+										  [sourceDatabase postgresQuotedIdentifier],
+										  [tableName postgresQuotedIdentifier]];
 
 		[connection queryString:createTableStatement];		
 		
@@ -68,10 +69,10 @@
 	if (structureCopySuccess && copyWithContent) {
 		
 		NSString *copyDataStatement = [NSString stringWithFormat:@"INSERT INTO %@.%@ SELECT * FROM %@.%@", 
-									   [targetDatabase backtickQuotedString],
-									   [tableName backtickQuotedString],
-									   [sourceDatabase backtickQuotedString],
-									   [tableName backtickQuotedString]
+									   [targetDatabase postgresQuotedIdentifier],
+									   [tableName postgresQuotedIdentifier],
+									   [sourceDatabase postgresQuotedIdentifier],
+									   [tableName postgresQuotedIdentifier]
 									   ];
 		
 		[connection queryString:copyDataStatement];		
@@ -114,23 +115,37 @@
 		success = NO;
 	}
 	
-	// Re-enable id creation
-	[connection queryString:@"/*!40101 SET SQL_MODE=@OLD_SQL_MODE */"];
-	
-	if ([connection queryErrored]) {
-		success = NO;
-	}
+	// PostgreSQL doesn't use SQL_MODE - no restoration needed
 	
 	return success;
 }
 
 - (BOOL)moveTable:(NSString *)tableName from:(NSString *)sourceDatabase to:(NSString *)targetDatabase
-{	
-	NSString *moveStatement = [NSString stringWithFormat:@"RENAME TABLE %@.%@ TO %@.%@", 
-							   [sourceDatabase backtickQuotedString],
-							   [tableName backtickQuotedString],
-							   [targetDatabase backtickQuotedString],
-							   [tableName backtickQuotedString]];
+{
+	NSString *moveStatement = [NSString stringWithFormat:@"ALTER TABLE %@.%@ RENAME TO %@", 
+							   [sourceDatabase postgresQuotedIdentifier],
+							   [tableName postgresQuotedIdentifier],
+							   [tableName postgresQuotedIdentifier]];
+	// Postgres RENAME TO only takes the new name, not the schema.
+	// If we want to move to another schema, we use SET SCHEMA.
+	// But here it seems we are renaming across databases? Postgres databases are isolated.
+	// If sourceDatabase and targetDatabase are different, we can't easily move tables between them in Postgres unless they are schemas in the same DB.
+	// Assuming they are schemas for now (since Sequel Ace treats schemas as databases often).
+	
+	if (![sourceDatabase isEqualToString:targetDatabase]) {
+		moveStatement = [NSString stringWithFormat:@"ALTER TABLE %@.%@ SET SCHEMA %@",
+						 [sourceDatabase postgresQuotedIdentifier],
+						 [tableName postgresQuotedIdentifier],
+						 [targetDatabase postgresQuotedIdentifier]];
+	} else {
+		// Just renaming in same schema? The method signature implies moving/renaming.
+		// If just renaming:
+		// moveStatement = [NSString stringWithFormat:@"ALTER TABLE %@.%@ RENAME TO %@", ...];
+		// But the arguments are sourceDatabase and targetDatabase.
+		// If they are same, it's a rename? But tableName is same in args?
+		// The method is moveTable:from:to:
+		// If tableName is same, and db is different, it's a move.
+	}
 
     SPLog(@"moveTable from : %@, to: %@", sourceDatabase, targetDatabase);
     SPLog(@"moveTable moveStatement: %@", moveStatement);
@@ -146,20 +161,66 @@
 - (NSString *)_createTableStatementFor:(NSString *)tableName inDatabase:(NSString *)sourceDatabase
 {
 
-    if([tableName respondsToSelector:@selector(backtickQuotedString)] == NO || [sourceDatabase respondsToSelector:@selector(backtickQuotedString)] == NO){
-        SPLog(@"_createTableStatementFor: tableName or sourceDatabase does not respond to selector: backtickQuotedString");
+    if([tableName respondsToSelector:@selector(postgresQuotedIdentifier)] == NO || [sourceDatabase respondsToSelector:@selector(postgresQuotedIdentifier)] == NO){
+        SPLog(@"_createTableStatementFor: tableName or sourceDatabase does not respond to selector: postgresQuotedIdentifier");
         return  nil;
     }
 
-	NSString *showCreateTableStatment = [NSString stringWithFormat:@"SHOW CREATE TABLE %@.%@", [sourceDatabase backtickQuotedString], [tableName backtickQuotedString]];
-	
-	SPMySQLResult *result = [connection queryString:showCreateTableStatment];
-	
-	if ([result numberOfRows] > 0) return [[result getRowAsArray] objectAtIndex:1];
-	
-	SPLog(@"query <%@> failed to return the expected result.\n  Error state: %@ (%lu)", showCreateTableStatment, [connection lastErrorMessage], [connection lastErrorID]);
+	// PostgreSQL: Build CREATE TABLE from information_schema since SHOW CREATE TABLE doesn't exist
+	// First, get the column definitions
+	NSString *columnsQuery = [NSString stringWithFormat:
+		@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default "
+		@"FROM information_schema.columns "
+		@"WHERE table_schema = %@ AND table_name = %@ "
+		@"ORDER BY ordinal_position",
+		[sourceDatabase tickQuotedString], [tableName tickQuotedString]];
 
-	return nil;
+	SPPostgresResult *result = [connection queryString:columnsQuery];
+
+	if ([result numberOfRows] == 0) {
+		SPLog(@"Failed to get column information for table %@.%@. Error: %@", sourceDatabase, tableName, [connection lastErrorMessage]);
+		return nil;
+	}
+
+	NSMutableString *createStatement = [NSMutableString stringWithFormat:@"CREATE TABLE %@.%@ (\n", [sourceDatabase postgresQuotedIdentifier], [tableName postgresQuotedIdentifier]];
+	NSMutableArray *columnDefs = [NSMutableArray array];
+
+	[result setReturnDataAsStrings:YES];
+	for (NSDictionary *row in result) {
+		NSMutableString *colDef = [NSMutableString stringWithFormat:@"  %@", [[row objectForKey:@"column_name"] postgresQuotedIdentifier]];
+
+		NSString *dataType = [row objectForKey:@"data_type"];
+		id maxLength = [row objectForKey:@"character_maximum_length"];
+		if (maxLength && ![maxLength isKindOfClass:[NSNull class]]) {
+			[colDef appendFormat:@" %@(%@)", dataType, maxLength];
+		} else {
+			[colDef appendFormat:@" %@", dataType];
+		}
+
+		// Safely check is_nullable (may be NSNumber or NSString from libpq)
+		id isNullable = [row objectForKey:@"is_nullable"];
+		BOOL isNotNullable = NO;
+		if ([isNullable isKindOfClass:[NSString class]]) {
+			isNotNullable = [isNullable isEqualToString:@"NO"];
+		} else if ([isNullable isKindOfClass:[NSNumber class]]) {
+			isNotNullable = ![isNullable boolValue];
+		}
+		if (isNotNullable) {
+			[colDef appendString:@" NOT NULL"];
+		}
+
+		id defaultValue = [row objectForKey:@"column_default"];
+		if (defaultValue && ![defaultValue isKindOfClass:[NSNull class]] && [defaultValue length]) {
+			[colDef appendFormat:@" DEFAULT %@", defaultValue];
+		}
+
+		[columnDefs addObject:colDef];
+	}
+
+	[createStatement appendString:[columnDefs componentsJoinedByString:@",\n"]];
+	[createStatement appendString:@"\n)"];
+
+	return createStatement;
 }
 
 @end

@@ -35,9 +35,9 @@
 #import "SPTableView.h"
 #import "SPServerSupport.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 // Constants
 static const NSString *SPTriggerName       = @"TriggerName";
@@ -200,14 +200,14 @@ static SPTriggerEventTag TagForEvent(NSString *mysql);
 	// In case of error, all the old trigger info is kept in buffer
 	if (isEdit && [(NSString *)[editedTrigger objectForKey:SPTriggerName] length] > 0)
 	{
-		NSString *queryDelete = [NSString stringWithFormat:@"DROP TRIGGER %@.%@",
-								 [[tableDocumentInstance database] backtickQuotedString],
-								 [[editedTrigger objectForKey:SPTriggerName] backtickQuotedString]];
+		NSString *queryDelete = [NSString stringWithFormat:@"DROP TRIGGER %@ ON %@",
+								 [[editedTrigger objectForKey:SPTriggerName] postgresQuotedIdentifier],
+								 [[tablesListInstance tableName] postgresQuotedIdentifier]];
 		
 		[connection queryString:queryDelete];
 		
 		if ([connection queryErrored]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to delete trigger", @"error deleting trigger message") message:[NSString stringWithFormat:NSLocalizedString(@"The selected trigger couldn't be deleted.\n\nMySQL said: %@", @"error deleting trigger informative message"), [connection lastErrorMessage]] callback:^{
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to delete trigger", @"error deleting trigger message") message:[NSString stringWithFormat:NSLocalizedString(@"The selected trigger couldn't be deleted.\n\nPostgreSQL said: %@", @"error deleting trigger informative message"), [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:^{
 
 				[self performSelector:@selector(_openTriggerSheet) withObject:nil afterDelay:0.0];
 			}];
@@ -246,10 +246,10 @@ static SPTriggerEventTag TagForEvent(NSString *mysql);
 	NSString *triggerStatement  = [triggerStatementTextView string];
 
 	NSString *query = [NSString stringWithFormat:createTriggerStatementTemplate,
-					   [triggerName backtickQuotedString],
+					   [triggerName postgresQuotedIdentifier],
 					   triggerActionTime,
 					   triggerEvent,
-					   [[tablesListInstance tableName] backtickQuotedString],
+					   [[tablesListInstance tableName] postgresQuotedIdentifier],
 					   triggerStatement];
 
 	// Execute query
@@ -261,10 +261,10 @@ static SPTriggerEventTag TagForEvent(NSString *mysql);
 		// In case of error, re-create the original trigger statement
 		if (isEdit) {
 			query = [NSString stringWithFormat:createTriggerStatementTemplate,
-					 [[editedTrigger objectForKey:SPTriggerName] backtickQuotedString],
+					 [[editedTrigger objectForKey:SPTriggerName] postgresQuotedIdentifier],
 					 [editedTrigger objectForKey:SPTriggerActionTime],
 					 [editedTrigger objectForKey:SPTriggerEvent],
-					 [[tablesListInstance tableName] backtickQuotedString],
+					 [[tablesListInstance tableName] postgresQuotedIdentifier],
 					 [editedTrigger objectForKey:SPTriggerStatement]];
 		
 			// If this attempt to re-create the trigger failed, then we're screwed as we've just lost the user's 
@@ -272,7 +272,7 @@ static SPTriggerEventTag TagForEvent(NSString *mysql);
 			// or will it interfere with the one above?
 			[connection queryString:query];
 		}
-		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error creating trigger", @"error creating trigger message") message:[NSString stringWithFormat:NSLocalizedString(@"The specified trigger was unable to be created.\n\nMySQL said: %@", @"error creating trigger informative message"), createTriggerError] callback:^{
+		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error creating trigger", @"error creating trigger message") message:[NSString stringWithFormat:NSLocalizedString(@"The specified trigger was unable to be created.\n\nPostgreSQL said: %@", @"error creating trigger informative message"), createTriggerError] callback:^{
 			[self performSelector:@selector(_openTriggerSheet) withObject:nil afterDelay:0.0];
 		}];
 	}
@@ -304,17 +304,17 @@ static SPTriggerEventTag TagForEvent(NSString *mysql);
 	if ([triggersTableView numberOfSelectedRows] > 0) {
 		[NSAlert createDefaultAlertWithTitle:NSLocalizedString(@"Delete trigger", @"delete trigger message") message:NSLocalizedString(@"Are you sure you want to delete the selected triggers? This action cannot be undone.", @"delete selected trigger informative message") primaryButtonTitle:NSLocalizedString(@"Delete", @"delete button") primaryButtonHandler:^{
 
-			NSString *database = [self->tableDocumentInstance database];
+			NSString *thisTable = [self->tablesListInstance tableName];
 			NSIndexSet *selectedSet = [self->triggersTableView selectedRowIndexes];
 
 			[selectedSet enumerateIndexesWithOptions:NSEnumerationReverse usingBlock:^(NSUInteger row, BOOL * _Nonnull stop) {
 				NSString *triggerName = [[self->triggerData objectAtIndex:row] objectForKey:SPTriggerName];
-				NSString *query = [NSString stringWithFormat:@"DROP TRIGGER %@.%@", [database backtickQuotedString], [triggerName backtickQuotedString]];
+				NSString *query = [NSString stringWithFormat:@"DROP TRIGGER %@ ON %@", [triggerName postgresQuotedIdentifier], [thisTable postgresQuotedIdentifier]];
 
 				[self->connection queryString:query];
 
 				if ([self->connection queryErrored]) {
-					[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to delete trigger", @"error deleting trigger message") message:[NSString stringWithFormat:NSLocalizedString(@"The selected trigger couldn't be deleted.\n\nMySQL said: %@", @"error deleting trigger informative message"), [self->connection lastErrorMessage]] callback:nil];
+					[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to delete trigger", @"error deleting trigger message") message:[NSString stringWithFormat:NSLocalizedString(@"The selected trigger couldn't be deleted.\n\nPostgreSQL said: %@", @"error deleting trigger informative message"), [self->connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 					// Abort loop
 					*stop = YES;
 				}
@@ -552,9 +552,9 @@ static SPTriggerEventTag TagForEvent(NSString *mysql);
 									[trigger objectForKey:@"Event"],     SPTriggerEvent,
 									[trigger objectForKey:@"Timing"],    SPTriggerActionTime,
 									statementString,                     SPTriggerStatement,
-									[trigger objectForKey:@"Definer"],   SPTriggerDefiner,
-									[trigger objectForKey:@"Created"],   SPTriggerCreated,
-									[trigger objectForKey:@"sql_mode"],  SPTriggerSQLMode,
+									[trigger objectForKey:@"Definer"] ?: @"",   SPTriggerDefiner,
+									[trigger objectForKey:@"Created"] ?: @"",   SPTriggerCreated,
+									[trigger objectForKey:@"sql_mode"] ?: @"",  SPTriggerSQLMode,
 									nil]];
 			
 		}

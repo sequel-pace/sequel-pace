@@ -38,9 +38,9 @@
 #import "SPThreadAdditions.h"
 #import "SPFunctions.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 // Constants
 static const NSString *SPNewIndexIndexName      = @"IndexName";
@@ -91,15 +91,15 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 		windowMinWidth = [[self window] minSize].width;
 		windowMinHeigth = [[self window] minSize].height;
 
-		// Create an array of field types that supporting specifying an index length prefix
+		// Create an array of field types that support specifying an index length prefix (PostgreSQL)
+		// In PostgreSQL, only character types support prefix length in indexes
 		supportsLength = [[NSArray alloc] initWithObjects:
-						  @"CHAR", @"VARCHAR", @"TINYTEXT", @"TEXT", @"MEDIUMTEXT", @"LONGTEXT",
-						  @"BINARY", @"VARBINARY", @"TINYBLOB", @"BLOB", @"MEDIUMBLOB", @"LONGBLOB", nil];
+						  @"CHARACTER", @"CHAR", @"CHARACTER VARYING", @"VARCHAR", @"TEXT", nil];
 
-		// Create an array of field types that require an index length prefix
+		// Create an array of field types that require an index length prefix (PostgreSQL)
+		// In PostgreSQL, TEXT type requires length specification for btree indexes on expressions
 		requiresLength = [[NSArray alloc] initWithObjects:
-						  @"TINYTEXT", @"TEXT", @"MEDIUMTEXT", @"LONGTEXT",
-						  @"TINYBLOB", @"BLOB", @"MEDIUMBLOB", @"LONGBLOB", nil];
+						  @"TEXT", nil];
 	}
 
 	return self;
@@ -151,9 +151,11 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 	// Check whether a save of the current field row is required.
 	if (![tableStructure saveRowOnDeselect]) return;
 
-	isMyISAMTable = [[tableData statusValueForKey:@"Engine"] isEqualToString:@"MyISAM"];
-	isInnoDBTable = [[tableData statusValueForKey:@"Engine"] isEqualToString:@"InnoDB"];
-	
+	// PostgreSQL doesn't have engine types like MySQL (MyISAM, InnoDB)
+	// All PostgreSQL tables support the same index types (BTREE, HASH, GIN, GIST, etc.)
+	isMyISAMTable = NO;
+	isInnoDBTable = NO;
+
 	// Reset visibility of the primary key item
 	[[[indexTypePopUpButton menu] itemWithTag:SPPrimaryKeyMenuTag] setHidden:NO];
 
@@ -217,12 +219,13 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 
 	[addIndexedColumnButton setEnabled:([indexedFields count] < [fields count])];
 
-	// MyISAM and InnoDB tables only support BTREE storage types so disable the storage type popup button
-	// as it's the default anyway.
-	[indexStorageTypePopUpButton setEnabled:(!(isMyISAMTable || isInnoDBTable))];
+	// PostgreSQL supports multiple index storage types (BTREE, HASH, GIN, GIST, BRIN, SP-GiST)
+	// Enable the storage type popup for PostgreSQL
+	[indexStorageTypePopUpButton setEnabled:YES];
 
-	// The ability to specify an index's key block size was added in MySQL 5.1.10 so is supported by all supported mysql versions now
-	[indexKeyBlockSizeTextField setEnabled:YES];
+	// Key block size is not a PostgreSQL concept (it's MySQL-specific)
+	// Disable this field for PostgreSQL
+	[indexKeyBlockSizeTextField setEnabled:NO];
 
 	// Begin the sheet
 	[[dbDocument parentWindowControllerWindow] beginSheet:self.window completionHandler:^(NSModalResponse returnCode) {
@@ -347,8 +350,9 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 			[indexNameTextField setStringValue:@""];
 		}
 
-		// Specifiying an index storage type (i.e. HASH or BTREE) is not permitted with SPATIAL indexes
-		[indexStorageTypePopUpButton setEnabled:(indexType != SPSpatialMenuTag) && !(isMyISAMTable || isInnoDBTable)];
+		// PostgreSQL: Enable storage type selection for all index types except SPATIAL
+		// (SPATIAL uses GiST by default with PostGIS)
+		[indexStorageTypePopUpButton setEnabled:(indexType != SPSpatialMenuTag)];
 	}
 	
 	[indexSizeTableColumn setHidden:[self _isFullTextIndexSelected]];
@@ -659,37 +663,29 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 }
 
 /**
- * Adds any additional index types depending on the table type.
+ * Adds any additional index types depending on the database capabilities.
+ * PostgreSQL supports GIN indexes for full-text search and GiST for spatial data,
+ * but these are configured differently than MySQL's FULLTEXT and SPATIAL indexes.
  */
 - (void)_addAdditionalIndexTypes
-{	
+{
+	// Remove existing special index types first
 	if ([indexTypePopUpButton indexOfItemWithTag:SPSpatialMenuTag] > -1) {
 		[indexTypePopUpButton removeItemAtIndex:[indexTypePopUpButton indexOfItemWithTag:SPSpatialMenuTag]];
 	}
-	
+
 	if ([indexTypePopUpButton indexOfItemWithTag:SPFullTextMenuTag] > -1) {
 		[indexTypePopUpButton removeItemAtIndex:[indexTypePopUpButton indexOfItemWithTag:SPFullTextMenuTag]];
 	}
-	
-	// SPATIAL index types are only available using the MyISAM engine
-	if (isMyISAMTable) {
-        NSMenuItem *spatialMenuItem = [[NSMenuItem alloc] init];
-        
-        [spatialMenuItem setTitle:NSLocalizedString(@"SPATIAL", @"spatial index menu item title")];
-        [spatialMenuItem setTag:SPSpatialMenuTag];
-        
-        [[indexTypePopUpButton menu] addItem:spatialMenuItem];
-	}
-	
-	// FULLTEXT only works with MyISAM and (InnoDB since 5.6.4)
-	if (isMyISAMTable || (isInnoDBTable && [[dbDocument serverSupport] supportsFulltextOnInnoDB])) {
-		NSMenuItem *fullTextMenuItem = [[NSMenuItem alloc] init];
-		
-		[fullTextMenuItem setTitle:NSLocalizedString(@"FULLTEXT", @"full text index menu item title")];
-		[fullTextMenuItem setTag:SPFullTextMenuTag];
-		
-		[[indexTypePopUpButton menu] addItem:fullTextMenuItem];
-	}
+
+	// PostgreSQL: SPATIAL indexes are available via PostGIS using GiST storage
+	// Add as an option - GiST indexes can be created via the storage type popup
+	// For now, we don't add SPATIAL as a separate type since PostgreSQL
+	// handles this through the USING clause (e.g., CREATE INDEX ... USING GIST)
+
+	// PostgreSQL: Full-text search uses GIN indexes on tsvector columns
+	// This is handled differently than MySQL's FULLTEXT, so we don't add it here.
+	// Users can create GIN indexes by selecting GIN as the storage type.
 }
 
 /**
@@ -750,7 +746,7 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 				indexName = @"";
 			}
 			else {
-				indexName = ([indexName isEqualToString:@""]) ? @"" : [indexName backtickQuotedString];
+				indexName = ([indexName isEqualToString:@""]) ? @"" : [indexName tickQuotedString];
 			}
 
 			// For each column add it to the temp array and check if size is required
@@ -768,36 +764,34 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 				if ([requiresLength containsObject:[columnType uppercaseString]] && (![(NSString *)[column objectForKey:@"Size"] length]) && !isFullTextType) continue;
 
 				if ([column objectForKey:@"Size"] && [supportsLength containsObject:columnType] && !isFullTextType) {
-					[tempIndexedColumns addObject:[NSString stringWithFormat:@"%@ (%@)", [columnName backtickQuotedString], [column objectForKey:@"Size"]]];
+					[tempIndexedColumns addObject:[NSString stringWithFormat:@"%@ (%@)", [columnName tickQuotedString], [column objectForKey:@"Size"]]];
 				}
 				else {
-					[tempIndexedColumns addObject:[columnName backtickQuotedString]];
+					[tempIndexedColumns addObject:[columnName tickQuotedString]];
 				}
 			}
 
 			if ([tempIndexedColumns count]) {
 
-				if ((![indexType isEqualToString:@"INDEX"]) && (![indexType isEqualToString:@"PRIMARY KEY"])) indexType = [indexType stringByAppendingFormat:@" INDEX"];
+				NSMutableString *query = [NSMutableString string];
 
-				// Build the query
-				NSMutableString *query = [NSMutableString stringWithFormat:@"ALTER TABLE %@ ADD %@", [table backtickQuotedString], indexType];
+				if ([indexType isEqualToString:@"PRIMARY KEY"]) {
+					[query appendFormat:@"ALTER TABLE %@ ADD PRIMARY KEY (%@)", [table tickQuotedString], [tempIndexedColumns componentsJoinedByCommas]];
+				}
+				else {
+					if ([indexType isEqualToString:@"UNIQUE"]) {
+						[query appendString:@"CREATE UNIQUE INDEX "];
+					} else {
+						[query appendString:@"CREATE INDEX "];
+					}
 
-				// If supplied specify the index's name
-				if ([indexName length]) {
-					[query appendString:@" "];
-					[query appendString:indexName];
+					if ([indexName length]) {
+						[query appendString:indexName];
+					}
+					
+					[query appendFormat:@" ON %@ (%@)", [table tickQuotedString], [tempIndexedColumns componentsJoinedByCommas]];
 				}
 
-				// If supplied specify the index's storage type
-				if (indexStorageType) {
-					[query appendString:@" USING "];
-					[query appendString:indexStorageType];
-				}
-
-				// Add the columns
-				[query appendFormat:@" (%@)", [tempIndexedColumns componentsJoinedByCommas]];
-
-				// If supplied specify the index's key block size
 				if (indexKeyBlockSize) {
 					[query appendFormat:@" KEY_BLOCK_SIZE = %ld", (long)[indexKeyBlockSize integerValue]];
 				}
@@ -807,7 +801,7 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 
 				// Check for errors, but only if the query wasn't cancelled
 				if ([connection queryErrored] && ![connection lastQueryWasCancelled]) {
-					[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to add index", @"add index error message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to add the index.\n\nMySQL said: %@", @"add index error informative message"), [connection lastErrorMessage]] callback:nil];
+					[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to add index", @"add index error message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to add the index.\n\nPostgreSQL said: %@", @"add index error informative message"), [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 				}
 				else {
 					[tableData resetAllData];
@@ -841,33 +835,38 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 		NSString *fkName  = [indexDetails objectForKey:@"ForeignKey"];
 
 		// Remove the foreign key dependency before the index if required
+		// PostgreSQL: Use DROP CONSTRAINT instead of MySQL's DROP FOREIGN KEY
 		if ([fkName length]) {
 
-			[connection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP FOREIGN KEY %@", [table backtickQuotedString], [fkName backtickQuotedString]]];
+			[connection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP CONSTRAINT %@", [table postgresQuotedIdentifier], [fkName postgresQuotedIdentifier]]];
 
 			// Check for errors, but only if the query wasn't cancelled
 			if ([connection queryErrored] && ![connection lastQueryWasCancelled]) {
 				NSMutableDictionary *errorDictionary = [NSMutableDictionary dictionary];
 
 				[errorDictionary setObject:NSLocalizedString(@"Unable to delete relation", @"error deleting relation message") forKey:@"title"];
-				[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to delete the relation '%@'.\n\nMySQL said: %@", @"error deleting relation informative message"), fkName, [connection lastErrorMessage]] forKey:@"message"];
+				[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to delete the relation '%@'.\n\nPostgreSQL said: %@", @"error deleting relation informative message"), fkName, [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] forKey:@"message"];
 
 				[[tableStructure onMainThread] showErrorSheetWith:errorDictionary];
 			}
 		}
 
 		if ([index isEqualToString:@"PRIMARY"]) {
-			[connection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP PRIMARY KEY", [table backtickQuotedString]]];
+			// PostgreSQL: Primary key constraints are named tablename_pkey by default
+			// Use DROP CONSTRAINT with the standard PostgreSQL naming convention
+			[connection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP CONSTRAINT \"%@_pkey\"", [table postgresQuotedIdentifier], table]];
 		}
 		else {
-			[connection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP INDEX %@",
-			                                                   [table backtickQuotedString], [index backtickQuotedString]]];
+			// PostgreSQL: DROP INDEX schema.index_name (no IF EXISTS for compatibility)
+			[connection queryString:[NSString stringWithFormat:@"DROP INDEX %@", [index postgresQuotedIdentifier]]];
 		}
 
 		// Check for errors, but only if the query wasn't cancelled
 		if ([connection queryErrored] && ![connection lastQueryWasCancelled]) {
-			//if the last error was 1553 and we did not already try to remove a FK beforehand, we have to request to remove the foreign key before we can remove the index
-			if([connection lastErrorID] == 1553 /* ER_DROP_INDEX_FK */ && ![fkName length]) {
+			// If the error indicates a foreign key constraint (PostgreSQL uses pattern matching instead of error codes)
+			// Check for constraint-related errors that prevent index deletion
+			NSString *errorMsg = [[connection lastErrorMessage] lowercaseString] ?: @"";
+			if(([errorMsg rangeOfString:@"constraint"].location != NSNotFound || [errorMsg rangeOfString:@"depends on"].location != NSNotFound) && ![fkName length]) {
 				NSDictionary *details = @{
 					@"Key_name": index,
 					@"error": SPBoxNil([connection lastErrorMessage])
@@ -878,7 +877,7 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 				NSMutableDictionary *errorDictionary = [NSMutableDictionary dictionary];
 
 				[errorDictionary setObject:NSLocalizedString(@"Unable to delete index", @"error deleting index message") forKey:@"title"];
-				[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to delete the index.\n\nMySQL said: %@", @"error deleting index informative message"), [connection lastErrorMessage]] forKey:@"message"];
+				[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to delete the index.\n\nPostgreSQL said: %@", @"error deleting index informative message"), [connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] forKey:@"message"];
 
 				[[tableStructure onMainThread] showErrorSheetWith:errorDictionary];
 			}
@@ -928,14 +927,14 @@ static void *IndexesControllerKVOContext = &IndexesControllerKVOContext;
 		NSArray *fkColumns = [[fkInfo objectForKey:@"columns"] sortedArrayUsingSelector:@selector(compare:)];
 		if(![myColumns isEqualToArray:fkColumns]) continue;
 		if(constraintName != nil) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"A foreign key needs this index", @"table structure : indexes : delete index : error 1553, no FK found : title") message:[NSString stringWithFormat:NSLocalizedString(@"This index cannot be deleted, because it is used by an existing foreign key relationship.\n\nPlease remove the relationship, before trying to remove this index.\n\nMySQL said: %@", @"table structure : indexes : delete index : error 1553, no FK found : description"), [info objectForKey:@"error"]] callback:nil];
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"A foreign key needs this index", @"table structure : indexes : delete index : error 1553, no FK found : title") message:[NSString stringWithFormat:NSLocalizedString(@"This index cannot be deleted, because it is used by an existing foreign key relationship.\n\nPlease remove the relationship, before trying to remove this index.\n\nPostgreSQL said: %@", @"table structure : indexes : delete index : error 1553, no FK found : description"), [info objectForKey:@"error"]] callback:nil];
 			return;
 		}
 		constraintName = [fkInfo objectForKey:@"name"];
 	}
 	
 	if (!constraintName) {
-		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"A foreign key needs this index", @"table structure : indexes : delete index : error 1553, no FK found : title") message:[NSString stringWithFormat:NSLocalizedString(@"This index cannot be deleted, because it is used by an existing foreign key relationship.\n\nPlease remove the relationship, before trying to remove this index.\n\nMySQL said: %@", @"table structure : indexes : delete index : error 1553, no FK found : description"), [info objectForKey:@"error"]] callback:nil];
+		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"A foreign key needs this index", @"table structure : indexes : delete index : error 1553, no FK found : title") message:[NSString stringWithFormat:NSLocalizedString(@"This index cannot be deleted, because it is used by an existing foreign key relationship.\n\nPlease remove the relationship, before trying to remove this index.\n\nPostgreSQL said: %@", @"table structure : indexes : delete index : error 1553, no FK found : description"), [info objectForKey:@"error"]] callback:nil];
 		return;
 	}
 

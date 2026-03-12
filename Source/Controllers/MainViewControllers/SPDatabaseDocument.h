@@ -43,7 +43,7 @@
 @class SPServerSupport;
 @class SPCustomQuery;
 @class SPDatabaseStructure;
-@class SPMySQLConnection;
+@class SPPostgresConnection;
 @class SPCharsetCollationHelper;
 @class SPGotoDatabaseController;
 @class SPCreateDatabaseInfo;
@@ -59,12 +59,12 @@
 #import "SPConstants.h"
 
 #import <WebKit/WebKit.h>
-#import <SPMySQL/SPMySQLConnectionDelegate.h>
+#import "SPPostgresConnection.h"
 
 /**
  * The SPDatabaseDocument class controls the primary database view window.
  */
-@interface SPDatabaseDocument : NSObject <SPConnectionControllerDelegateProtocol, SPMySQLConnectionDelegate, NSTextFieldDelegate, NSToolbarDelegate, SPCountedObject, WebFrameLoadDelegate>
+@interface SPDatabaseDocument : NSObject <SPConnectionControllerDelegateProtocol, SPPostgresConnectionDelegate, NSTextFieldDelegate, NSToolbarDelegate, SPCountedObject, WebFrameLoadDelegate>
 {
 	// IBOutlets
 	IBOutlet SPTablesList *tablesListInstance;
@@ -154,7 +154,7 @@
 	NSInteger passwordSheetReturnCode;
 
 	// Master connection
-	SPMySQLConnection *mySQLConnection;
+	SPPostgresConnection *postgresConnection;
 
 	// Controllers
 	SPConnectionController *connectionController;
@@ -172,7 +172,7 @@
 	BOOL allowSplitViewResizing;
 
 	NSString *selectedDatabase;
-	NSString *mySQLVersion;
+	NSString *postgresVersion;
 	NSString *selectedDatabaseEncoding;
 	NSUserDefaults *prefs;
 	NSUndoManager *undoManager;
@@ -274,8 +274,8 @@
 - (void)initQueryEditorWithString:(NSString *)query;
 
 // Connection callback and methods
-- (void)setConnection:(SPMySQLConnection *)theConnection;
-- (SPMySQLConnection *)getConnection;
+- (void)setConnection:(SPPostgresConnection *)theConnection;
+- (SPPostgresConnection *)getConnection;
 
 // Database methods
 - (IBAction)chooseDatabase:(id)sender;
@@ -302,13 +302,13 @@
 - (void)setTaskIndicatorShouldAnimate:(BOOL)shouldAnimate;
 
 // Encoding methods
-- (void)setConnectionEncoding:(NSString *)mysqlEncoding reloadingViews:(BOOL)reloadViews;
+- (void)setConnectionEncoding:(NSString *)encoding reloadingViews:(BOOL)reloadViews;
 - (NSString *)databaseEncoding;
 - (void)detectDatabaseEncoding;
 - (BOOL)supportsEncoding;
 - (void)updateEncodingMenuWithSelectedEncoding:(NSNumber *)encodingTag;
-- (NSNumber *)encodingTagFromMySQLEncoding:(NSString *)mysqlEncoding;
-- (NSString *)mysqlEncodingFromEncodingTag:(NSNumber *)encodingTag;
+- (NSNumber *)encodingTagFromPostgresEncoding:(NSString *)postgresEncoding;
+- (NSString *)postgresEncodingFromEncodingTag:(NSNumber *)encodingTag;
 
 // Table methods
 - (IBAction)saveCreateSyntax:(id)sender;
@@ -342,7 +342,7 @@
 - (NSString *)name;
 - (NSString *)database;
 - (NSString *)port;
-- (NSString *)mySQLVersion;
+- (NSString *)postgresVersion;
 - (NSString *)user;
 - (NSString *)connectionID;
 - (NSString *)tabTitleForTooltip;
@@ -480,6 +480,6 @@
 
 #pragma mark Help menu
 
-- (void)showMySQLHelp;
+- (void)showPostgreSQLHelp;
 
 @end

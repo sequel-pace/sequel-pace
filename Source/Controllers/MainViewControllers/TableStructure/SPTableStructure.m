@@ -49,9 +49,10 @@
 #import "SPIdMenu.h"
 #import "SPComboBoxCell.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
+#import "SPPostgresDataTypes.h"
 
 @interface SPFieldTypeHelp ()
 
@@ -200,57 +201,79 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 			@"SERIAL DEFAULT VALUE"
 	];
 
-	// Note that changing the contents or ordering of this array will affect the implementation of 
-	// SPTableFieldValidation. See it's implementation file for more details.
+	// PostgreSQL-native data types organized by category
+	// Note: SPTableFieldValidation uses set-based type checking, not index positions
 	typeSuggestions = @[
-		SPMySQLTinyIntType,
-		SPMySQLSmallIntType,
-		SPMySQLMediumIntType,
-		SPMySQLIntType,
-		SPMySQLBigIntType,
-		SPMySQLFloatType,
-		SPMySQLDoubleType,
-		SPMySQLDoublePrecisionType,
-		SPMySQLRealType,
-		SPMySQLDecimalType,
-		SPMySQLBitType,
-		SPMySQLSerialType,
-		SPMySQLBoolType,
-		SPMySQLBoolean,
-		SPMySQLDecType,
-		SPMySQLFixedType,
-		SPMySQLNumericType,
+		// Numeric Types
+		SPPostgresSmallIntType,
+		SPPostgresIntegerType,
+		SPPostgresBigIntType,
+		SPPostgresDecimalType,
+		SPPostgresNumericType,
+		SPPostgresRealType,
+		SPPostgresDoublePrecisionType,
+		SPPostgresSmallSerialType,
+		SPPostgresSerialType,
+		SPPostgresBigSerialType,
+		SPPostgresMoneyType,
 		@"--------",
-		SPMySQLCharType,
-		SPMySQLVarCharType,
-		SPMySQLTinyTextType,
-		SPMySQLTextType,
-		SPMySQLMediumTextType,
-		SPMySQLLongTextType,
-		SPMySQLTinyBlobType,
-		SPMySQLMediumBlobType,
-		SPMySQLBlobType,
-		SPMySQLLongBlobType,
-		SPMySQLBinaryType,
-		SPMySQLVarBinaryType,
-		SPMySQLJsonType,
-		SPMySQLEnumType,
-		SPMySQLSetType,
+		// Character Types
+		SPPostgresCharType,
+		SPPostgresVarCharType,
+		SPPostgresTextType,
 		@"--------",
-		SPMySQLDateType,
-		SPMySQLDatetimeType,
-		SPMySQLTimestampType,
-		SPMySQLTimeType,
-		SPMySQLYearType,
+		// Binary Types
+		SPPostgresByteaType,
 		@"--------",
-		SPMySQLGeometryType,
-		SPMySQLPointType,
-		SPMySQLLineStringType,
-		SPMySQLPolygonType,
-		SPMySQLMultiPointType,
-		SPMySQLMultiLineStringType,
-		SPMySQLMultiPolygonType,
-		SPMySQLGeometryCollectionType];
+		// Date/Time Types
+		SPPostgresDateType,
+		SPPostgresTimeType,
+		SPPostgresTimeTZType,
+		SPPostgresTimestampType,
+		SPPostgresTimestampTZType,
+		SPPostgresIntervalType,
+		@"--------",
+		// Boolean
+		SPPostgresBooleanType,
+		@"--------",
+		// UUID
+		SPPostgresUUIDType,
+		@"--------",
+		// JSON Types
+		SPPostgresJSONType,
+		SPPostgresJSONBType,
+		@"--------",
+		// Network Types
+		SPPostgresCidrType,
+		SPPostgresInetType,
+		SPPostgresMacAddrType,
+		SPPostgresMacAddr8Type,
+		@"--------",
+		// Bit String Types
+		SPPostgresBitType,
+		SPPostgresBitVaryingType,
+		@"--------",
+		// Geometric Types
+		SPPostgresPointType,
+		SPPostgresLineType,
+		SPPostgresLsegType,
+		SPPostgresBoxType,
+		SPPostgresPathType,
+		SPPostgresPolygonType,
+		SPPostgresCircleType,
+		@"--------",
+		// Range Types
+		SPPostgresInt4RangeType,
+		SPPostgresInt8RangeType,
+		SPPostgresNumRangeType,
+		SPPostgresTsRangeType,
+		SPPostgresTsTZRangeType,
+		SPPostgresDateRangeType,
+		@"--------",
+		// Other Types
+		SPPostgresXMLType,
+		SPPostgresTsVectorType,
+		SPPostgresTsQueryType];
 
 	[fieldValidation setFieldTypes:typeSuggestions];
 	
@@ -309,7 +332,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	BOOL allowNull = [[[tableDataInstance statusValueForKey:@"Engine"] uppercaseString] isEqualToString:@"CSV"] ? NO : [prefs boolForKey:SPNewFieldsAllowNulls];
 	
 	[[self activeFieldsSource] insertObject:[NSMutableDictionary
-							   dictionaryWithObjects:[NSArray arrayWithObjects:@"", @"INT", @"", @"0", @"0", @"0", allowNull ? @"1" : @"0", @"", [prefs stringForKey:SPNullValue], @"None", @"", nil]
+							   dictionaryWithObjects:[NSArray arrayWithObjects:@"", @"integer", @"", @"0", @"0", @"0", allowNull ? @"1" : @"0", @"", [prefs stringForKey:SPNullValue], @"None", @"", nil]
 							   forKeys:@[@"name", @"type", @"length", @"unsigned", @"zerofill", @"binary", @"null", @"Key", @"default", @"Extra", @"comment"]]
 					  atIndex:insertIndex];
 
@@ -328,16 +351,16 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
  */
 - (IBAction)showOptimizedFieldType:(id)sender
 {
-	SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT %@ FROM %@ PROCEDURE ANALYSE(0,8192)", 
-		[[[[self activeFieldsSource] objectAtIndex:[tableSourceView selectedRow]] objectForKey:@"name"] backtickQuotedString],
-		[selectedTable backtickQuotedString]]];
+	SPPostgresResult *theResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT %@ FROM %@ LIMIT 1", 
+		[[[[self activeFieldsSource] objectAtIndex:[tableSourceView selectedRow]] objectForKey:@"name"] postgresQuotedIdentifier],
+		[selectedTable postgresQuotedIdentifier]]];
 
 	// Check for errors
-	if ([mySQLConnection queryErrored]) {
+	if ([postgresConnection queryErrored]) {
 		NSString *message = NSLocalizedString(@"Error while fetching the optimized field type", @"error while fetching the optimized field type message");
 		
-		if ([mySQLConnection isConnected]) {
-			 [NSAlert createWarningAlertWithTitle:message message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while fetching the optimized field type.\n\nMySQL said:%@", @"an error occurred while fetching the optimized field type.\n\nMySQL said:%@"), [mySQLConnection lastErrorMessage]] callback:nil];
+		if ([postgresConnection isConnected]) {
+			 [NSAlert createWarningAlertWithTitle:message message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while fetching the optimized field type.\n\nPostgreSQL said:%@", @"an error occurred while fetching the optimized field type.\n\nPostgreSQL said:%@"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 		}
 		return;
 	}
@@ -582,9 +605,10 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 #pragma mark Additional methods
 
 /**
- * Try table's auto_increment to a specific value
+ * Reset table's sequence to a specific value
+ * PostgreSQL uses sequences instead of MySQL's AUTO_INCREMENT
  *
- * @param valueAsString The new auto_increment integer as NSString
+ * @param value The new sequence value as NSNumber
  */
 - (void)setAutoIncrementTo:(NSNumber *)value
 {
@@ -600,11 +624,31 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 		return;
 	}
 
-	// only int and float types can be AUTO_INCREMENT and right now BIGINT = 64 Bit (<= long long) is the largest type mysql supports
-	[mySQLConnection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ AUTO_INCREMENT = %llu", [selTable backtickQuotedString], [value unsignedLongLongValue]]];
+	// PostgreSQL: Find the sequence name for SERIAL/IDENTITY columns and reset it
+	// First, find any columns with nextval() in their default value
+	SPPostgresResult *seqResult = [postgresConnection queryString:[NSString stringWithFormat:
+		@"SELECT pg_get_serial_sequence(%@, column_name) AS seq_name "
+		@"FROM information_schema.columns "
+		@"WHERE table_schema = 'public' AND table_name = %@ "
+		@"AND column_default LIKE 'nextval%%'",
+		[selTable tickQuotedString], [selTable tickQuotedString]]];
 
-	if ([mySQLConnection queryErrored]) {
-		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to reset AUTO_INCREMENT of table '%@'.\n\nMySQL said: %@", @"error resetting auto_increment informative message"),selTable, [mySQLConnection lastErrorMessage]] callback:nil];
+	[seqResult setReturnDataAsStrings:YES];
+
+	if ([seqResult numberOfRows] > 0) {
+		NSDictionary *row = [seqResult getRowAsDictionary];
+		NSString *sequenceName = [row objectForKey:@"seq_name"];
+
+		if (sequenceName && ![sequenceName isKindOfClass:[NSNull class]] && [sequenceName length]) {
+			// Reset the sequence using ALTER SEQUENCE ... RESTART WITH
+			[postgresConnection queryString:[NSString stringWithFormat:
+				@"ALTER SEQUENCE %@ RESTART WITH %llu",
+				sequenceName, [value unsignedLongLongValue]]];
+		}
+	}
+
+	if ([postgresConnection queryErrored]) {
+		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to reset the sequence of table '%@'.\n\nPostgreSQL said: %@", @"error resetting sequence informative message"), selTable, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 	}
 
 	// reload data
@@ -620,7 +664,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 /**
  * Converts the supplied result to an array containing a (mutable) dictionary for each row
  */
-- (NSArray *)convertIndexResultToArray:(SPMySQLResult *)theResult
+- (NSArray *)convertIndexResultToArray:(SPPostgresResult *)theResult
 {
 	NSUInteger numOfRows = (NSUInteger)[theResult numberOfRows];
 	NSMutableArray *tempResult = [NSMutableArray arrayWithCapacity:numOfRows];
@@ -643,14 +687,19 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 		}
 
 		// Update some fields to be more human-readable or GUI compatible
-		if ([[tempRow objectForKey:@"Extra"] isEqualToString:@""]) {
+		id extraValue = [tempRow objectForKey:@"Extra"];
+		if (extraValue == nil || [extraValue isKindOfClass:[NSNull class]] ||
+		    ([extraValue isKindOfClass:[NSString class]] && [extraValue isEqualToString:@""])) {
 			[tempRow setObject:@"None" forKey:@"Extra"];
 		}
-		if ([[tempRow objectForKey:@"Null"] isEqualToString:@"YES"]) {
-			[tempRow setObject:@"1" forKey:@"Null"];
-		} else {
-			[tempRow setObject:@"0" forKey:@"Null"];
+		id nullValue = [tempRow objectForKey:@"Null"];
+		BOOL isNullable = NO;
+		if ([nullValue isKindOfClass:[NSString class]]) {
+			isNullable = [nullValue isEqualToString:@"YES"];
+		} else if ([nullValue isKindOfClass:[NSNumber class]]) {
+			isNullable = [nullValue boolValue];
 		}
+		[tempRow setObject:isNullable ? @"1" : @"0" forKey:@"Null"];
 		[tempResult addObject:tempRow];
 	}
 
@@ -689,9 +738,9 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 }
 
 /**
- * Tries to write row to mysql-db
- * returns YES if row written to db, otherwies NO
- * returns YES if no row is beeing edited and nothing has to be written to db
+ * Tries to write row to PostgreSQL database
+ * returns YES if row written to db, otherwise NO
+ * returns YES if no row is being edited and nothing has to be written to db
  */
 - (BOOL)addRowToDB
 {
@@ -705,58 +754,89 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
 	NSDictionary *theRow = [[self activeFieldsSource] safeObjectAtIndex:currentlyEditingRow];
 
-	if ([autoIncrementIndex isEqualToString:@"PRIMARY KEY"]) {
-		// If the field isn't set to be unsigned and we're making it the primary key then make it unsigned
-		if (![[theRow safeObjectForKey:@"unsigned"] boolValue]) {
-			NSMutableDictionary *rowCpy = [theRow mutableCopy];
-			[rowCpy setObject:@YES forKey:@"unsigned"];
-			theRow = rowCpy;
-		}
-	}
+	NSMutableString *queryString = [NSMutableString string];
 
-	NSMutableString *queryString = [NSMutableString stringWithFormat:@"ALTER TABLE %@",[selectedTable backtickQuotedString]];
-	[queryString appendString:@" "];
 	if (isEditingNewRow) {
-		[queryString appendString:@"ADD"];
+		// PostgreSQL: ADD COLUMN syntax
+		[queryString appendFormat:@"ALTER TABLE %@ ADD COLUMN ", [selectedTable postgresQuotedIdentifier]];
+		[queryString appendString:[self _buildPartialColumnDefinitionString:theRow]];
+
+		// Process index if given for fields set to AUTO_INCREMENT (SERIAL in PostgreSQL)
+		if (autoIncrementIndex) {
+			if ([autoIncrementIndex isEqualToString:@"PRIMARY KEY"]) {
+				[queryString appendString:@" PRIMARY KEY"];
+			}
+			else {
+				// Add index separately
+				[queryString appendFormat:@"; CREATE INDEX ON %@ (%@)",
+					[selectedTable postgresQuotedIdentifier],
+					[[theRow objectForKey:@"name"] postgresQuotedIdentifier]];
+			}
+		}
 	}
 	else {
-		[queryString appendFormat:@"CHANGE %@",[[oldRow objectForKey:@"name"] backtickQuotedString]];
-	}
-	[queryString appendString:@" "];
-	[queryString appendString:[self _buildPartialColumnDefinitionString:theRow]];
+		// PostgreSQL: Modifying existing column requires multiple ALTER statements
+		NSString *oldName = [oldRow objectForKey:@"name"];
+		NSString *newName = [theRow objectForKey:@"name"];
+		NSString *newType = [[theRow objectForKey:@"type"] uppercaseString];
 
-	// Process index if given for fields set to AUTO_INCREMENT
-	if (autoIncrementIndex) {
-		// User wants to add PRIMARY KEY
-		if ([autoIncrementIndex isEqualToString:@"PRIMARY KEY"]) {
-			[queryString appendString:@"\n PRIMARY KEY"];
-
-			// Add AFTER ... only if the user added a new field
-			if (isEditingNewRow) {
-				[queryString appendFormat:@"\n AFTER %@", [[[[self activeFieldsSource] safeObjectAtIndex:(currentlyEditingRow -1)] objectForKey:@"name"] backtickQuotedString]];
-			}
+		// Check if column name changed
+		if (![oldName isEqualToString:newName]) {
+			[queryString appendFormat:@"ALTER TABLE %@ RENAME COLUMN %@ TO %@; ",
+				[selectedTable postgresQuotedIdentifier],
+				[oldName postgresQuotedIdentifier],
+				[newName postgresQuotedIdentifier]];
 		}
-		else {
-			// Add AFTER ... only if the user added a new field
-			if (isEditingNewRow) {
-				[queryString appendFormat:@"\n AFTER %@", [[[[self activeFieldsSource] safeObjectAtIndex:(currentlyEditingRow -1)] objectForKey:@"name"] backtickQuotedString]];
-			}
 
-			[queryString appendFormat:@"\n, ADD %@ (%@)", autoIncrementIndex, [[theRow objectForKey:@"name"] backtickQuotedString]];
+		// Change column type
+		[queryString appendFormat:@"ALTER TABLE %@ ALTER COLUMN %@ TYPE %@",
+			[selectedTable postgresQuotedIdentifier],
+			[newName postgresQuotedIdentifier],
+			newType];
+
+		// Add length if specified
+		if ([theRow objectForKey:@"length"] && [[[theRow objectForKey:@"length"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] length]) {
+			[queryString appendFormat:@"(%@)", [theRow objectForKey:@"length"]];
 		}
-	}
-	// Add AFTER ... only if the user added a new field
-	else if (isEditingNewRow) {
-		[queryString appendFormat:@"\n AFTER %@", [[[[self activeFieldsSource] safeObjectAtIndex:(currentlyEditingRow -1)] objectForKey:@"name"] backtickQuotedString]];
+
+		// Handle NULL constraint
+		if ([[theRow objectForKey:@"null"] integerValue] == 0) {
+			[queryString appendFormat:@"; ALTER TABLE %@ ALTER COLUMN %@ SET NOT NULL",
+				[selectedTable postgresQuotedIdentifier],
+				[newName postgresQuotedIdentifier]];
+		} else {
+			[queryString appendFormat:@"; ALTER TABLE %@ ALTER COLUMN %@ DROP NOT NULL",
+				[selectedTable postgresQuotedIdentifier],
+				[newName postgresQuotedIdentifier]];
+		}
+
+		// Handle DEFAULT value
+		NSString *defaultValue = [theRow objectForKey:@"default"];
+		if (defaultValue && [defaultValue length] > 0) {
+			if ([defaultValue isEqualToString:[prefs objectForKey:SPNullValue]]) {
+				[queryString appendFormat:@"; ALTER TABLE %@ ALTER COLUMN %@ SET DEFAULT NULL",
+					[selectedTable postgresQuotedIdentifier],
+					[newName postgresQuotedIdentifier]];
+			} else {
+				[queryString appendFormat:@"; ALTER TABLE %@ ALTER COLUMN %@ SET DEFAULT %@",
+					[selectedTable postgresQuotedIdentifier],
+					[newName postgresQuotedIdentifier],
+					[postgresConnection escapeAndQuoteString:defaultValue]];
+			}
+		} else {
+			[queryString appendFormat:@"; ALTER TABLE %@ ALTER COLUMN %@ DROP DEFAULT",
+				[selectedTable postgresQuotedIdentifier],
+				[newName postgresQuotedIdentifier]];
+		}
 	}
 
 	isCurrentExtraAutoIncrement = NO;
 	autoIncrementIndex = nil;
 
 	// Execute query
-	[mySQLConnection queryString:queryString];
+	[postgresConnection queryString:queryString];
 
-	if (![mySQLConnection queryErrored]) {
+	if (![postgresConnection queryErrored]) {
 		isEditingRow = NO;
 		isEditingNewRow = NO;
 		currentlyEditingRow = -1;
@@ -774,8 +854,23 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 		return YES;
 	}
 	else {
-		if ([mySQLConnection lastErrorID] == 1146) { // If the current table doesn't exist anymore
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to alter table '%@'.\n\nMySQL said: %@", @"error while trying to alter table message"),selectedTable, [mySQLConnection lastErrorMessage]] callback:nil];
+		// Check for PostgreSQL "table does not exist" error pattern
+		// Guard against nil error message - if nil, assume table exists but query failed for other reason
+		NSString *errorMsg = [postgresConnection lastErrorMessage];
+		BOOL tableDoesNotExist = NO;
+
+		if (errorMsg != nil) {
+			NSString *lowerErrorMsg = [errorMsg lowercaseString];
+			tableDoesNotExist = [lowerErrorMsg containsString:@"does not exist"];
+		}
+
+		// Also check if connection was lost
+		if (![postgresConnection isConnected]) {
+			tableDoesNotExist = YES;
+		}
+
+		if (tableDoesNotExist) { // If the current table doesn't exist anymore
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to alter table '%@'.\n\nPostgreSQL said: %@", @"error while trying to alter table message"), selectedTable, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 
 			isEditingRow = NO;
 			isEditingNewRow = NO;
@@ -795,7 +890,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 		}
 
 		if (isEditingNewRow) {
-			NSString *alertMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred when trying to add the field '%@' via\n\n%@\n\nMySQL said: %@", @"error adding field informative message"), [theRow objectForKey:@"name"], queryString, [mySQLConnection lastErrorMessage]];
+			NSString *alertMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred when trying to add the field '%@' via\n\n%@\n\nPostgreSQL said: %@", @"error adding field informative message"), [theRow objectForKey:@"name"], queryString, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 			[NSAlert createDefaultAlertWithTitle:NSLocalizedString(@"Error adding field", @"error adding field message") message:alertMessage primaryButtonTitle:NSLocalizedString(@"Edit row", @"Edit row button") primaryButtonHandler:^{
 				[self addRowSheetPrimaryAction];
 			} cancelButtonHandler:^{
@@ -804,7 +899,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 			}];
 
 		} else {
-			NSString *alertMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred when trying to change the field '%@' via\n\n%@\n\nMySQL said: %@", @"error changing field informative message"), [theRow objectForKey:@"name"], queryString, [mySQLConnection lastErrorMessage]];
+			NSString *alertMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred when trying to change the field '%@' via\n\n%@\n\nPostgreSQL said: %@", @"error changing field informative message"), [theRow objectForKey:@"name"], queryString, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 			[NSAlert createDefaultAlertWithTitle:NSLocalizedString(@"Error changing field", @"error changing field message") message:alertMessage primaryButtonTitle:NSLocalizedString(@"Edit row", @"Edit row button") primaryButtonHandler:^{
 				[self addRowSheetPrimaryAction];
 			} cancelButtonHandler:^{
@@ -842,7 +937,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
     if ([theRow objectForKey:@"generatedalways"])
         theRowGeneratedAlways = [[[theRow objectForKey:@"generatedalways"] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
 
-	queryString = [NSMutableString stringWithString:[[theRow objectForKey:@"name"] backtickQuotedString]];
+	queryString = [NSMutableString stringWithString:[[theRow objectForKey:@"name"] postgresQuotedIdentifier]];
 
 	[queryString appendString:@" "];
 	[queryString appendString:theRowType];
@@ -873,7 +968,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 		}
 		// Otherwise, use the provided default
 		else {
-			[queryString appendFormat:@"\n DEFAULT %@ ", [mySQLConnection escapeAndQuoteString:[theRow objectForKey:@"default"]]];
+			[queryString appendFormat:@"\n DEFAULT %@ ", [postgresConnection escapeAndQuoteString:[theRow objectForKey:@"default"]]];
 		}
 	}
 
@@ -885,38 +980,19 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
 	if(!specialFieldTypes) {
 
-		if ([theRowType isEqualToString:@"JSON"] || [theRowType isEqualToString:@"UUID"]) {
-			// we "see" JSON as a string, but it is not internally to MySQL and so doesn't allow CHARACTER SET/BINARY/COLLATE either.
+		// PostgreSQL handles encoding/collation at database level, not per-column
+		// CHARACTER SET, BINARY, and COLLATE are MySQL-specific keywords
+		// and are not supported for column definitions in PostgreSQL
+		if ([fieldValidation isFieldTypeString:theRowType]) {
+			// PostgreSQL uses COLLATE at column level but with different syntax
+			NSString *fieldCollation = [theRow objectForKey:@"collationName"];
+			if([fieldCollation length]) {
+				[queryString appendFormat:@" COLLATE \"%@\"", fieldCollation];
+			}
 		}
-		else if ([fieldValidation isFieldTypeString:theRowType]) {
-			// Add CHARSET
-			NSString *fieldEncoding = [theRow objectForKey:@"encodingName"];
-			if([fieldEncoding length]) {
-				[queryString appendFormat:@"\n CHARACTER SET %@", fieldEncoding];
-			}
-
-			if ([[theRow objectForKey:@"binary"] integerValue] == 1) {
-				[queryString appendString:@"\n BINARY"];
-			}
-			else {
-				// ADD COLLATE
-				// Note: a collate without charset is valid in MySQL. The charset can be determined from a collation.
-				NSString *fieldCollation = [theRow objectForKey:@"collationName"];
-				if([fieldCollation length]) {
-					[queryString appendFormat:@"\n COLLATE %@", fieldCollation];
-				}
-			}
-
-		}
+		// PostgreSQL doesnt support UNSIGNED or ZEROFILL - these are MySQL-only keywords
 		else if ([fieldValidation isFieldTypeNumeric:theRowType] && (![theRowType isEqualToString:@"BIT"])) {
-
-			if ([[theRow objectForKey:@"unsigned"] integerValue] == 1) {
-				[queryString appendString:@"\n UNSIGNED"];
-			}
-
-			if ( [[theRow objectForKey:@"zerofill"] integerValue] == 1) {
-				[queryString appendString:@"\n ZEROFILL"];
-			}
+			// UNSIGNED and ZEROFILL generation removed for PostgreSQL compatibility
 		}
 
         // Don't provide NULL / NOT NULL for generated field
@@ -1001,7 +1077,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
             else if ([theRowType hasSuffix:@"CHAR"] || [theRowType hasSuffix:@"TEXT"] || [theRowType hasSuffix:@"ENUM"] || [theRowType isInArray:@[@"TIMESTAMP",@"DATETIME",@"DATE"]]) {
                 // If default value is not an expresion or a string, add quotes.
                 if (!defaultValueIsExpression && !defaultValueIsString)
-                    [queryString appendFormat:@"\n DEFAULT %@", [mySQLConnection escapeAndQuoteString:defaultValue]];
+                    [queryString appendFormat:@"\n DEFAULT %@", [postgresConnection escapeAndQuoteString:defaultValue]];
                 else
                     [queryString appendFormat:@"\n DEFAULT %@", defaultValue];
             }
@@ -1012,7 +1088,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
             // Otherwise, use the provided default (Can be an expression, int value....)
             else  {
                 [queryString appendFormat:@"\n DEFAULT %@", defaultValue];
-//                [queryString appendFormat:@"\n DEFAULT %@", [mySQLConnection escapeAndQuoteString:defaultValue]];
+//                [queryString appendFormat:@"\n DEFAULT %@", [postgresConnection escapeAndQuoteString:defaultValue]];
             }
 		}
 
@@ -1041,7 +1117,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
     // Any column comments
     if ([(NSString *)[theRow objectForKey:@"comment"] length]) {
-        [queryString appendFormat:@"\n COMMENT %@", [mySQLConnection escapeAndQuoteString:[theRow objectForKey:@"comment"]]];
+        [queryString appendFormat:@"\n COMMENT %@", [postgresConnection escapeAndQuoteString:[theRow objectForKey:@"comment"]]];
     }
 
 	return queryString;
@@ -1140,12 +1216,13 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 /**
  * Sets the connection (received from SPDatabaseDocument) and makes things that have to be done only once
  */
-- (void)setConnection:(SPMySQLConnection *)theConnection
+- (void)setConnection:(SPPostgresConnection *)theConnection
 {
-	mySQLConnection = theConnection;
+    postgresConnection = nil;
+    postgresConnection = theConnection;
 	
 	// Set the indexes controller connection
-	[indexesController setConnection:mySQLConnection];
+	[indexesController setConnection:postgresConnection];
 	
 	// Set up tableView
 	[tableSourceView registerForDraggedTypes:@[SPDefaultPasteboardDragType]];
@@ -1211,8 +1288,8 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	NSString *nullValue = [prefs stringForKey:SPNullValue];
 	CFStringRef escapedNullValue = CFXMLCreateStringByEscapingEntities(NULL, ((CFStringRef)nullValue), NULL);
 
-	SPMySQLResult *structureQueryResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW COLUMNS FROM %@", [selectedTable backtickQuotedString]]];
-	SPMySQLResult *indexesQueryResult   = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW INDEXES FROM %@", [selectedTable backtickQuotedString]]];
+	SPPostgresResult *structureQueryResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT column_name AS Field, data_type AS Type, is_nullable AS \"Null\", column_default AS \"Default\" FROM information_schema.columns WHERE table_name = %@", [selectedTable tickQuotedString]]];
+	SPPostgresResult *indexesQueryResult   = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT indexname AS Key_name, indexdef AS Index_type FROM pg_indexes WHERE tablename = %@", [selectedTable tickQuotedString]]];
 
 	[structureQueryResult setReturnDataAsStrings:YES];
 	[indexesQueryResult setReturnDataAsStrings:YES];
@@ -1346,28 +1423,28 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 					}
 				}
 
-				[self->mySQLConnection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP FOREIGN KEY %@", [self->selectedTable backtickQuotedString], [relationName backtickQuotedString]]];
+				[self->postgresConnection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP CONSTRAINT %@", [self->selectedTable postgresQuotedIdentifier], [relationName postgresQuotedIdentifier]]];
 
 				// Check for errors, but only if the query wasn't cancelled
-				if ([self->mySQLConnection queryErrored] && ![self->mySQLConnection lastQueryWasCancelled]) {
+				if ([self->postgresConnection queryErrored] && ![self->postgresConnection lastQueryWasCancelled]) {
 					NSMutableDictionary *errorDictionary = [NSMutableDictionary dictionary];
 					[errorDictionary setObject:NSLocalizedString(@"Unable to delete relation", @"error deleting relation message") forKey:@"title"];
-					[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to delete the relation '%@'.\n\nMySQL said: %@", @"error deleting relation informative message"), relationName, [self->mySQLConnection lastErrorMessage]] forKey:@"message"];
+					[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to delete the relation '%@'.\n\nPostgreSQL said: %@", @"error deleting relation informative message"), relationName, [self->postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] forKey:@"message"];
 					[[self onMainThread] showErrorSheetWith:errorDictionary];
 				}
 			}
 
 			// Remove field
-			[self->mySQLConnection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP %@",
-																	[self->selectedTable backtickQuotedString], [[[[self activeFieldsSource] safeObjectAtIndex:[self->tableSourceView selectedRow]] safeObjectForKey:@"name"] backtickQuotedString]]];
+			[self->postgresConnection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ DROP COLUMN %@",
+																	[self->selectedTable postgresQuotedIdentifier], [[[[self activeFieldsSource] safeObjectAtIndex:[self->tableSourceView selectedRow]] safeObjectForKey:@"name"] postgresQuotedIdentifier]]];
 
 			// Check for errors, but only if the query wasn't cancelled
-			if ([self->mySQLConnection queryErrored] && ![self->mySQLConnection lastQueryWasCancelled]) {
+			if ([self->postgresConnection queryErrored] && ![self->postgresConnection lastQueryWasCancelled]) {
 				NSMutableDictionary *errorDictionary = [NSMutableDictionary dictionary];
 				[errorDictionary setObject:NSLocalizedString(@"Error", @"error") forKey:@"title"];
-				[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"Couldn't delete field %@.\nMySQL said: %@", @"message of panel when field cannot be deleted"),
+				[errorDictionary setObject:[NSString stringWithFormat:NSLocalizedString(@"Couldn't delete field %@.\nPostgreSQL said: %@", @"message of panel when field cannot be deleted"),
 																	  [[[self activeFieldsSource] objectAtIndex:[self->tableSourceView selectedRow]] objectForKey:@"name"],
-																	  [self->mySQLConnection lastErrorMessage]] forKey:@"message"];
+																	  [self->postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] forKey:@"message"];
 
 				[[self onMainThread] showErrorSheetWith:errorDictionary];
 			}
@@ -1418,22 +1495,23 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	}
 
 	// Retrieve the indexes for the table
-	SPMySQLResult *indexResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW INDEX FROM %@", [aTable backtickQuotedString]]];
+	SPPostgresResult *indexesQueryResult   = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT indexname AS Key_name, indexdef AS Index_type FROM pg_indexes WHERE tablename = %@", [selectedTable tickQuotedString]]];
 
 	// If an error occurred, reset the interface and abort
-	if ([mySQLConnection queryErrored]) {
-		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SMySQLQueryHasBeenPerformed" object:tableDocumentInstance];
+	if ([postgresConnection queryErrored]) {
+		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPostgresQueryHasBeenPerformed" object:tableDocumentInstance];
 		[[self onMainThread] setTableDetails:nil];
 
-		if ([mySQLConnection isConnected]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving information.\nMySQL said: %@", @"message of panel when retrieving information failed"), [mySQLConnection lastErrorMessage]] callback:nil];
+		if ([postgresConnection isConnected]) {
+			NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving information.\nPostgreSQL said: %@", @"message of panel when retrieving information failed"), lastError] callback:nil];
 		}
 
 		return;
 	}
 
 	// Process the indexes into a local array of dictionaries
-	NSArray *tableIndexes = [self convertIndexResultToArray:indexResult];
+	NSArray *tableIndexes = [self convertIndexResultToArray:indexesQueryResult];
 
 	// Set the Key column
 	for (NSDictionary *index in tableIndexes)
@@ -1464,40 +1542,67 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	NSArray *encodings  = [databaseDataInstance getDatabaseCharacterSetEncodings];
 
 	SPMainQSync(^{
-		[self->encodingPopupCell removeAllItems];
+		@try {
+			[self->encodingPopupCell removeAllItems];
 
-		if ([encodings count]) {
+			if (encodings && [encodings count]) {
 
-			[self->encodingPopupCell addItemWithTitle:@"dummy"];
-			//copy the default attributes and add gray color
-			NSMutableDictionary *defaultAttrs = [NSMutableDictionary dictionaryWithDictionary:[[self->encodingPopupCell attributedTitle] attributesAtIndex:0 effectiveRange:NULL]];
-			[defaultAttrs setObject:[NSColor lightGrayColor] forKey:NSForegroundColorAttributeName];
-			[[self->encodingPopupCell lastItem] setTitle:@""];
+				[self->encodingPopupCell addItemWithTitle:@"dummy"];
+				//copy the default attributes and add gray color - with safety check
+				NSMutableDictionary *defaultAttrs = nil;
+				NSAttributedString *attributedTitle = [self->encodingPopupCell attributedTitle];
+				if (attributedTitle && [attributedTitle length] > 0) {
+					defaultAttrs = [NSMutableDictionary dictionaryWithDictionary:[attributedTitle attributesAtIndex:0 effectiveRange:NULL]];
+				} else {
+					defaultAttrs = [NSMutableDictionary dictionary];
+				}
+				[defaultAttrs setObject:[NSColor lightGrayColor] forKey:NSForegroundColorAttributeName];
+				[[self->encodingPopupCell lastItem] setTitle:@""];
 
-			for (NSDictionary *encoding in encodings)
-			{
-				NSString *encodingName = [encoding safeObjectForKey:@"CHARACTER_SET_NAME"];
-				NSString *title = (![encoding safeObjectForKey:@"DESCRIPTION"]) ? encodingName : [NSString stringWithFormat:@"%@ (%@)", [encoding safeObjectForKey:@"DESCRIPTION"], encodingName];
+				for (NSDictionary *encoding in encodings)
+				{
+					if (!encoding || ![encoding isKindOfClass:[NSDictionary class]]) continue;
+					
+					NSString *encodingName = [encoding safeObjectForKey:@"CHARACTER_SET_NAME"];
+					if (!encodingName || [encodingName isNSNull]) {
+						encodingName = @"";
+					}
+					
+					NSString *title = encodingName;
+					id descObj = [encoding safeObjectForKey:@"DESCRIPTION"];
+					if (descObj && ![descObj isNSNull]) {
+						title = [NSString stringWithFormat:@"%@ (%@)", descObj, encodingName];
+					}
 
-                if(title == nil || [title isNSNull]) {
-                    // default to empty string?
-                    title = @"";
-                }
+					if(title == nil || [title isNSNull]) {
+						title = @"";
+					}
 
-				[self->encodingPopupCell safeAddItemWithTitle:title];
-				NSMenuItem *item = [self->encodingPopupCell lastItem];
+					[self->encodingPopupCell safeAddItemWithTitle:title];
+					NSMenuItem *item = [self->encodingPopupCell lastItem];
 
-				[item setRepresentedObject:encodingName];
+					if (item) {
+						[item setRepresentedObject:encodingName];
 
-				if ([encodingName isEqualToString:[self->tableDataInstance tableEncoding]]) {
-
-					NSAttributedString *itemString = [[NSAttributedString alloc] initWithString:[item title] attributes:defaultAttrs];
-
-					[item setAttributedTitle:itemString];
+						NSString *tableEncoding = [self->tableDataInstance tableEncoding];
+						if (encodingName && tableEncoding && [encodingName isEqualToString:tableEncoding]) {
+							NSString *itemTitle = [item title];
+							if (itemTitle && [itemTitle length] > 0) {
+								NSAttributedString *itemString = [[NSAttributedString alloc] initWithString:itemTitle attributes:defaultAttrs];
+								[item setAttributedTitle:itemString];
+							}
+						}
+					}
 				}
 			}
+			else {
+				[self->encodingPopupCell addItemWithTitle:NSLocalizedString(@"Not available", @"not available label")];
+			}
 		}
-		else {
+		@catch (NSException *exception) {
+			NSLog(@"SPTableStructure loadTable encoding block exception: %@ - %@", [exception name], [exception reason]);
+			// Fallback - just add a default item
+			[self->encodingPopupCell removeAllItems];
 			[self->encodingPopupCell addItemWithTitle:NSLocalizedString(@"Not available", @"not available label")];
 		}
 	});
@@ -1585,7 +1690,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 			[theField setObject:[prefs stringForKey:SPNullValue] forKey:@"default"];
 		}
         else if ([type hasSuffix:@"CHAR"] || [type hasSuffix:@"TEXT"] || [type hasSuffix:@"ENUM"]) {
-            [theField setObject:[mySQLConnection escapeAndQuoteString:[theField objectForKey:@"default"]] forKey:@"default"];
+            [theField setObject:[postgresConnection escapeAndQuoteString:[theField objectForKey:@"default"]] forKey:@"default"];
         }
 
 		// Init Extra field
@@ -1632,7 +1737,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	autoIncrementIndex = nil;
 
 	// Send the query finished/work complete notification
-	[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SMySQLQueryHasBeenPerformed" object:tableDocumentInstance];
+	[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPostgresQueryHasBeenPerformed" object:tableDocumentInstance];
 }
 
 /**
@@ -2020,37 +2125,40 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
 /**
  * Having validated a drop, perform the field/column reordering to match.
+ * NOTE: PostgreSQL does not support column reordering directly.
+ * This operation would require recreating the table which is not safe.
  */
 - (BOOL)tableView:(NSTableView*)tableView acceptDrop:(id <NSDraggingInfo>)info row:(NSInteger)destinationRowIndex dropOperation:(NSTableViewDropOperation)operation
 {
 	// Make sure that the drag operation is for the right table view
 	if (tableView != tableSourceView) return NO;
 
-	// Extract the original row position from the pasteboard and retrieve the details
+	// PostgreSQL does not support column reordering (FIRST/AFTER clauses)
+	// Show an informative message to the user
+	[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Column Reordering Not Supported", @"column reordering not supported title")
+								 message:NSLocalizedString(@"PostgreSQL does not support changing column order directly. To reorder columns, you would need to recreate the table with the desired column order.\n\nThe column order in the display can be changed, but this will not affect the actual table structure.", @"column reordering not supported message")
+								callback:nil];
+
+	// Return NO to indicate the drop was not accepted
+	// But we can still reorder the visual display locally if needed
+	return NO;
+
+	// Original MySQL code for reference - PostgreSQL cannot use MODIFY COLUMN with FIRST/AFTER
+	/*
 	NSInteger originalRowIndex = [[[info draggingPasteboard] stringForType:SPDefaultPasteboardDragType] integerValue];
 	NSDictionary *originalRow = [[NSDictionary alloc] initWithDictionary:[[self activeFieldsSource] objectAtIndex:originalRowIndex]];
 
 	[[NSNotificationCenter defaultCenter] postNotificationName:@"SMySQLQueryWillBePerformed" object:tableDocumentInstance];
 
-	// Begin construction of the reordering query
 	NSMutableString *queryString = [NSMutableString stringWithFormat:@"ALTER TABLE %@ MODIFY COLUMN %@",
-									[selectedTable backtickQuotedString],
+									[selectedTable postgresQuotedIdentifier],
 									[self _buildPartialColumnDefinitionString:originalRow]];
+	*/
 
-	[queryString appendString:@" "];
-	// Add the new location
-	if (destinationRowIndex == 0) {
-		[queryString appendString:@"FIRST"];
-	}
-	else {
-		[queryString appendFormat:@"AFTER %@", [[[[self activeFieldsSource] objectAtIndex:destinationRowIndex - 1] objectForKey:@"name"] backtickQuotedString]];
-	}
-
-	// Run the query; report any errors, or reload the table on success
-	[mySQLConnection queryString:queryString];
-
-	if ([mySQLConnection queryErrored]) {
-		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error moving field", @"error moving field message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to move the field.\n\nMySQL said: %@", @"error moving field informative message"), [mySQLConnection lastErrorMessage]] callback:nil];
+	/*
+	// This code is unreachable but kept for reference
+	if ([postgresConnection queryErrored]) {
+		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error moving field", @"error moving field message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to move the field.\n\nPostgreSQL said: %@", @"error moving field informative message"), [postgresConnection lastErrorMessage]] callback:nil];
 	}
 	else {
 		[tableDataInstance resetAllData];
@@ -2064,9 +2172,10 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 		[tableSourceView selectRowIndexes:[NSIndexSet indexSetWithIndex:destinationRowIndex - ((originalRowIndex < destinationRowIndex) ? 1 : 0)] byExtendingSelection:NO];
 	}
 
-	[[NSNotificationCenter defaultCenter] postNotificationName:@"SMySQLQueryHasBeenPerformed" object:tableDocumentInstance];
+	[[NSNotificationCenter defaultCenter] postNotificationName:@"SPostgresQueryHasBeenPerformed" object:tableDocumentInstance];
 
 	return YES;
+	*/
 }
 
 #pragma mark -
@@ -2238,9 +2347,15 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
 		// Check allow NULL
 		else if ([[tableColumn identifier] isEqualToString:@"null"]) {
-			[aCell setEnabled:([[row objectForKey:@"Key"] isEqualToString:@"PRI"] ||
-							   [[[row objectForKey:@"Extra"] uppercaseString] isEqualToString:@"AUTO_INCREMENT"] ||
-							   [[[tableDataInstance statusValueForKey:@"Engine"] uppercaseString] isEqualToString:@"CSV"]) ? NO : YES];
+			id keyValue = [row objectForKey:@"Key"];
+			id extraValue = [row objectForKey:@"Extra"];
+			id engineValue = [tableDataInstance statusValueForKey:@"Engine"];
+
+			BOOL isPrimaryKey = [keyValue isKindOfClass:[NSString class]] && [keyValue isEqualToString:@"PRI"];
+			BOOL isAutoIncrement = [extraValue isKindOfClass:[NSString class]] && [[extraValue uppercaseString] isEqualToString:@"AUTO_INCREMENT"];
+			BOOL isCsvEngine = [engineValue isKindOfClass:[NSString class]] && [[engineValue uppercaseString] isEqualToString:@"CSV"];
+
+			[aCell setEnabled:(isPrimaryKey || isAutoIncrement || isCsvEngine) ? NO : YES];
 		}
 
 		// TEXT, BLOB, date, GEOMETRY and JSON fields don't allow a length
@@ -2364,6 +2479,35 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
 - (void)comboBoxCellSelectionDidChange:(SPComboBoxCell *)cell
 {
+	NSInteger selectedIndex = [cell indexOfSelectedItem];
+	NSString *selectedValue = [typeSuggestions safeObjectAtIndex:selectedIndex];
+
+	// Skip separator lines - find next valid item
+	if ([selectedValue hasPrefix:@"----"]) {
+		// Move to next non-separator item
+		NSInteger newIndex = selectedIndex + 1;
+		while (newIndex < (NSInteger)[typeSuggestions count]) {
+			NSString *nextValue = [typeSuggestions safeObjectAtIndex:newIndex];
+			if (![nextValue hasPrefix:@"----"]) {
+				[cell selectItemAtIndex:newIndex];
+				break;
+			}
+			newIndex++;
+		}
+		// If we went past the end, move backwards
+		if (newIndex >= (NSInteger)[typeSuggestions count]) {
+			newIndex = selectedIndex - 1;
+			while (newIndex >= 0) {
+				NSString *prevValue = [typeSuggestions safeObjectAtIndex:newIndex];
+				if (![prevValue hasPrefix:@"----"]) {
+					[cell selectItemAtIndex:newIndex];
+					break;
+				}
+				newIndex--;
+			}
+		}
+	}
+
 	[self _displayFieldTypeHelpIfPossible:cell];
 }
 
@@ -2533,286 +2677,303 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	dispatch_once(&token, ^{
 		// NSString *FN(NSNumber *): format a number using the user locale (to make large numbers more legible)
 #define FN(x) [NSNumberFormatter localizedStringFromNumber:x numberStyle:NSNumberFormatterDecimalStyle]
-		NSString *intRangeTpl = NSLocalizedString(@"Signed: %@ to %@\nUnsigned: %@ to %@",@"range of integer types");
-		// NSString *INTR(NSNumber *sMin, NSNumber *sMax, NSNumber *uMin, NSNumber *uMax): return formatted string for integer types (signed min/max, unsigned min/max)
-#define INTR(sMin,sMax,uMin,uMax) [NSString stringWithFormat:intRangeTpl,FN(sMin),FN(sMax),FN(uMin),FN(uMax)]
 		list = @[
+			// ==================== NUMERIC TYPES ====================
 			MakeFieldTypeHelp(
-				SPMySQLTinyIntType,
-				@"TINYINT[(M)] [UNSIGNED] [ZEROFILL]",
-				INTR(@(-128),@127,@0,@255),
-				NSLocalizedString(@"The smallest integer type, requires 1 byte storage space. M is the optional display width and does not affect the possible value range.",@"description of tinyint")
+				SPPostgresSmallIntType,
+				@"smallint",
+				[NSString stringWithFormat:NSLocalizedString(@"Range: %@ to %@", @"range for smallint type"),FN(@(-32768)),FN(@32767)],
+				NSLocalizedString(@"Small-range integer. Storage: 2 bytes. Aliases: int2",@"description of smallint")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLSmallIntType,
-				@"SMALLINT[(M)] [UNSIGNED] [ZEROFILL]",
-				INTR(@(-32768), @32767, @0, @65535),
-				NSLocalizedString(@"Requires 2 bytes storage space. M is the optional display width and does not affect the possible value range.",@"description of smallint")
+				SPPostgresIntegerType,
+				@"integer",
+				[NSString stringWithFormat:NSLocalizedString(@"Range: %@ to %@", @"range for integer type"),FN(@(-2147483648)),FN(@2147483647)],
+				NSLocalizedString(@"Typical choice for integer. Storage: 4 bytes. Aliases: int, int4",@"description of integer")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLMediumIntType,
-				@"MEDIUMINT[(M)] [UNSIGNED] [ZEROFILL]",
-				INTR(@(-8388608), @8388607, @0, @16777215),
-				NSLocalizedString(@"Requires 3 bytes storage space. M is the optional display width and does not affect the possible value range.",@"description of mediumint")
+				SPPostgresBigIntType,
+				@"bigint",
+				[NSString stringWithFormat:NSLocalizedString(@"Range: %@ to %@", @"range for bigint type"),FN([NSDecimalNumber decimalNumberWithString:@"-9223372036854775808"]),FN([NSDecimalNumber decimalNumberWithString:@"9223372036854775807"])],
+				NSLocalizedString(@"Large-range integer. Storage: 8 bytes. Aliases: int8",@"description of bigint")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLIntType,
-				@"INT[(M)] [UNSIGNED] [ZEROFILL]",
-				INTR(@(-2147483648), @2147483647, @0, @4294967295),
-				NSLocalizedString(@"Requires 4 bytes storage space. M is the optional display width and does not affect the possible value range. INTEGER is an alias to this type.",@"description of int")
+				SPPostgresDecimalType,
+				@"decimal[(precision[,scale])]",
+				NSLocalizedString(@"Precision: up to 131072 digits before decimal point\nScale: up to 16383 digits after decimal point", @"range for decimal type"),
+				NSLocalizedString(@"User-specified precision, exact. Recommended for storing monetary amounts and other quantities where exactness is required. Storage: variable.",@"description of decimal")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLBigIntType,
-				@"BIGINT[(M)] [UNSIGNED] [ZEROFILL]",
-				INTR([NSDecimalNumber decimalNumberWithString:@"-9223372036854775808"], [NSDecimalNumber decimalNumberWithString:@"9223372036854775807"], @0, [NSDecimalNumber decimalNumberWithString:@"18446744073709551615"]),
-				NSLocalizedString(@"Requires 8 bytes storage space. M is the optional display width and does not affect the possible value range. Note: Arithmetic operations might fail for large numbers.",@"description of bigint")
+				SPPostgresNumericType,
+				@"numeric[(precision[,scale])]",
+				NSLocalizedString(@"Precision: up to 131072 digits before decimal point\nScale: up to 16383 digits after decimal point", @"range for numeric type"),
+				NSLocalizedString(@"Alias for decimal. User-specified precision, exact. Recommended for storing monetary amounts and other quantities where exactness is required.",@"description of numeric")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLFloatType,
-				@"FLOAT[(M,D)] [UNSIGNED] [ZEROFILL]",
-				NSLocalizedString(@"Accurate to approx. 7 decimal places", @"range of float"),
-				NSLocalizedString(@"IEEE 754 single-precision floating-point value. M is the maxium number of digits, of which D may be after the decimal point. Note: Many decimal numbers can only be approximated by floating-point values. See DECIMAL if you require exact results.",@"description of float")
+				SPPostgresRealType,
+				@"real",
+				NSLocalizedString(@"6 decimal digits precision\nRange: approximately 1E-37 to 1E+37", @"range for real type"),
+				NSLocalizedString(@"Single precision floating-point number. Storage: 4 bytes. Alias: float4. Inexact, variable-precision numeric type.",@"description of real")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLDoubleType,
-				@"DOUBLE[(M,D)] [UNSIGNED] [ZEROFILL]",
-				NSLocalizedString(@"Accurate to approx. 15 decimal places", @"range of double"),
-				NSLocalizedString(@"IEEE 754 double-precision floating-point value. M is the maxium number of digits, of which D may be after the decimal point. Note: Many decimal numbers can only be approximated by floating-point values. See DECIMAL if you require exact results.",@"description of double")
+				SPPostgresDoublePrecisionType,
+				@"double precision",
+				NSLocalizedString(@"15 decimal digits precision\nRange: approximately 1E-307 to 1E+308", @"range for double precision type"),
+				NSLocalizedString(@"Double precision floating-point number. Storage: 8 bytes. Alias: float8. Inexact, variable-precision numeric type.",@"description of double precision")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLDoublePrecisionType,
-				@"DOUBLE PRECISION[(M,D)] [UNSIGNED] [ZEROFILL]",
-				@"",
-				NSLocalizedString(@"This is an alias for DOUBLE.",@"description of double precision")
+				SPPostgresSmallSerialType,
+				@"smallserial",
+				[NSString stringWithFormat:NSLocalizedString(@"Range: 1 to %@", @"range for smallserial type"),FN(@32767)],
+				NSLocalizedString(@"Autoincrementing two-byte integer. Creates a sequence automatically. Equivalent to: smallint NOT NULL DEFAULT nextval('sequence'). Storage: 2 bytes.",@"description of smallserial")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLRealType,
-				@"REAL[(M,D)] [UNSIGNED] [ZEROFILL]",
-				@"",
-				NSLocalizedString(@"This is an alias for DOUBLE, unless REAL_AS_FLOAT is configured.",@"description of double real")
+				SPPostgresSerialType,
+				@"serial",
+				[NSString stringWithFormat:NSLocalizedString(@"Range: 1 to %@", @"range for serial type"),FN(@2147483647)],
+				NSLocalizedString(@"Autoincrementing four-byte integer. Creates a sequence automatically. Equivalent to: integer NOT NULL DEFAULT nextval('sequence'). Storage: 4 bytes.",@"description of serial")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLDecimalType,
-				@"DECIMAL[(M[,D])] [UNSIGNED] [ZEROFILL]",
-				NSLocalizedString(@"M (precision): Up to 65 digits\nD (scale): 0 to 30 digits", @"range of decimal"),
-				NSLocalizedString(@"A fixed-point, exact decimal value. M is the maxium number of digits, of which D may be after the decimal point. When rounding, 0-4 is always rounded down, 5-9 up (“round towards nearest”).",@"description of decimal")
+				SPPostgresBigSerialType,
+				@"bigserial",
+				[NSString stringWithFormat:NSLocalizedString(@"Range: 1 to %@", @"range for bigserial type"),FN([NSDecimalNumber decimalNumberWithString:@"9223372036854775807"])],
+				NSLocalizedString(@"Autoincrementing eight-byte integer. Creates a sequence automatically. Equivalent to: bigint NOT NULL DEFAULT nextval('sequence'). Storage: 8 bytes.",@"description of bigserial")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLSerialType,
-				@"SERIAL",
-				[NSString stringWithFormat:NSLocalizedString(@"Range: %@ to %@", @"range for serial type"),FN(@0),FN([NSDecimalNumber decimalNumberWithString:@"18446744073709551615"])],
-				NSLocalizedString(@"This is an alias for BIGINT UNSIGNED NOT NULL AUTO_INCREMENT UNIQUE.",@"description of serial")
+				SPPostgresMoneyType,
+				@"money",
+				NSLocalizedString(@"Range: -92233720368547758.08 to +92233720368547758.07", @"range for money type"),
+				NSLocalizedString(@"Currency amount with fixed fractional precision. Storage: 8 bytes. Output format is locale-sensitive (lc_monetary setting).",@"description of money")
+			),
+			// ==================== CHARACTER TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresCharType,
+				@"character(n)",
+				NSLocalizedString(@"n: 1 to 10485760 characters", @"range for character type"),
+				NSLocalizedString(@"Fixed-length, blank-padded character string. If the string to be stored is shorter than n, it will be blank-padded. Alias: char(n).",@"description of character")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLBitType,
-				@"BIT[(M)]",
-				NSLocalizedString(@"M: 1 (default) to 64", @"range for bit type"),
-				NSLocalizedString(@"A bit-field type. M specifies the number of bits. If shorter values are inserted, they will be aligned on the least significant bit. See the SET type if you want to explicitly name each bit.",@"description of bit")
+				SPPostgresVarCharType,
+				@"character varying(n)",
+				NSLocalizedString(@"n: 1 to 10485760 characters (unlimited if n omitted)", @"range for character varying type"),
+				NSLocalizedString(@"Variable-length character string with limit. Stores up to n characters without blank-padding. Alias: varchar(n).",@"description of character varying")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLBoolType,
-				@"BOOL",
-				@"",
-				NSLocalizedString(@"This is an alias for TINYINT(1).",@"description of bool")
+				SPPostgresTextType,
+				@"text",
+				NSLocalizedString(@"Variable unlimited length", @"range for text type"),
+				NSLocalizedString(@"Variable-length character string with unlimited length. There is no performance difference between text and varchar in PostgreSQL.",@"description of text")
+			),
+			// ==================== BINARY TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresByteaType,
+				@"bytea",
+				NSLocalizedString(@"Up to 1 GB", @"range for bytea type"),
+				NSLocalizedString(@"Variable-length binary string (byte array). Stores raw binary data. Use hex or escape format for input/output.",@"description of bytea")
+			),
+			// ==================== DATE/TIME TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresDateType,
+				@"date",
+				NSLocalizedString(@"Range: 4713 BC to 5874897 AD\nResolution: 1 day", @"range for date type"),
+				NSLocalizedString(@"Calendar date (year, month, day). Storage: 4 bytes.",@"description of date")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLBoolean,
-				@"BOOLEAN",
-				@"",
-				NSLocalizedString(@"This is an alias for TINYINT(1).",@"description of boolean")
+				SPPostgresTimeType,
+				@"time[(p)] [without time zone]",
+				NSLocalizedString(@"Range: 00:00:00 to 24:00:00\nResolution: 1 microsecond", @"range for time type"),
+				NSLocalizedString(@"Time of day without time zone. Storage: 8 bytes. p is optional precision (0-6, default 6) for fractional seconds.",@"description of time")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLDecType,
-				@"DEC[(M[,D])] [UNSIGNED] [ZEROFILL]",
-				@"",
-				NSLocalizedString(@"This is an alias for DECIMAL.",@"description of dec")
+				SPPostgresTimeTZType,
+				@"time[(p)] with time zone",
+				NSLocalizedString(@"Range: 00:00:00+1559 to 24:00:00-1559\nResolution: 1 microsecond", @"range for time with time zone type"),
+				NSLocalizedString(@"Time of day with time zone. Storage: 12 bytes. Includes time zone offset. Alias: timetz.",@"description of time with time zone")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLFixedType,
-				@"FIXED[(M[,D])] [UNSIGNED] [ZEROFILL]",
-				@"",
-				NSLocalizedString(@"This is an alias for DECIMAL.",@"description of fixed")
+				SPPostgresTimestampType,
+				@"timestamp[(p)] [without time zone]",
+				NSLocalizedString(@"Range: 4713 BC to 294276 AD\nResolution: 1 microsecond", @"range for timestamp type"),
+				NSLocalizedString(@"Date and time without time zone. Storage: 8 bytes. p is optional precision (0-6, default 6) for fractional seconds.",@"description of timestamp")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLNumericType,
-				@"NUMERIC[(M[,D])] [UNSIGNED] [ZEROFILL]",
-				@"",
-				NSLocalizedString(@"This is an alias for DECIMAL.",@"description of numeric")
-			),
-			// ----------------------------------------------------------------------------------
-			MakeFieldTypeHelp(
-				SPMySQLCharType,
-				@"CHAR(M)",
-				NSLocalizedString(@"M: 0 to 255 characters", @"range for char type"),
-				NSLocalizedString(@"A character string that will require M×w bytes per row, independent of the actual content length. w is the maximum number of bytes a single character can occupy in the given encoding.",@"description of char")
+				SPPostgresTimestampTZType,
+				@"timestamp[(p)] with time zone",
+				NSLocalizedString(@"Range: 4713 BC to 294276 AD\nResolution: 1 microsecond", @"range for timestamp with time zone type"),
+				NSLocalizedString(@"Date and time with time zone. Storage: 8 bytes. Internally stored as UTC, displayed in session timezone. Alias: timestamptz.",@"description of timestamp with time zone")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLVarCharType,
-				@"VARCHAR(M)",
-				[NSString stringWithFormat:NSLocalizedString(@"M: %@ to %@ characters", @"range for varchar type"),FN(@0),FN(@(65535))],
-				NSLocalizedString(@"A character string that can store up to M bytes, but requires less space for shorter values. The actual number of characters is further limited by the used encoding and the values of other fields in the row.",@"description of varchar")
+				SPPostgresIntervalType,
+				@"interval [fields][(p)]",
+				NSLocalizedString(@"Range: -178000000 years to +178000000 years\nResolution: 1 microsecond", @"range for interval type"),
+				NSLocalizedString(@"Time span. Storage: 16 bytes. Can restrict to YEAR, MONTH, DAY, HOUR, MINUTE, SECOND or combinations. p is fractional seconds precision (0-6).",@"description of interval")
+			),
+			// ==================== BOOLEAN TYPE ====================
+			MakeFieldTypeHelp(
+				SPPostgresBooleanType,
+				@"boolean",
+				NSLocalizedString(@"Values: true, false, null", @"range for boolean type"),
+				NSLocalizedString(@"Logical Boolean (true/false). Storage: 1 byte. Accepts: TRUE, 't', 'true', 'y', 'yes', 'on', '1' for true; FALSE, 'f', 'false', 'n', 'no', 'off', '0' for false.",@"description of boolean")
+			),
+			// ==================== UUID TYPE ====================
+			MakeFieldTypeHelp(
+				SPPostgresUUIDType,
+				@"uuid",
+				NSLocalizedString(@"Format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", @"format for uuid type"),
+				NSLocalizedString(@"Universally unique identifier. Storage: 16 bytes. Stores 128-bit UUID values. Use gen_random_uuid() or uuid-ossp extension to generate.",@"description of uuid")
+			),
+			// ==================== JSON TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresJSONType,
+				@"json",
+				NSLocalizedString(@"Variable length, stores exact copy of input", @"range for json type"),
+				NSLocalizedString(@"Textual JSON data. Validates JSON syntax on input but stores exact copy. Processing requires reparsing on each execution.",@"description of json")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLTinyTextType,
-				@"TINYTEXT",
-				NSLocalizedString(@"Up to 255 characters", @"range for tinytext type"),
-				NSLocalizedString(@"A character string that can store up to 255 bytes, but requires less space for shorter values. The actual number of characters is further limited by the used encoding. Unlike VARCHAR this type does not count towards the maximum row length.",@"description of tinytext")
+				SPPostgresJSONBType,
+				@"jsonb",
+				NSLocalizedString(@"Variable length, decomposed binary format", @"range for jsonb type"),
+				NSLocalizedString(@"Binary JSON data. Slower to input due to conversion overhead, but significantly faster to process. Supports indexing. Recommended over json for most cases.",@"description of jsonb")
+			),
+			// ==================== NETWORK TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresCidrType,
+				@"cidr",
+				NSLocalizedString(@"IPv4: 7 bytes, IPv6: 19 bytes", @"storage for cidr type"),
+				NSLocalizedString(@"IPv4 or IPv6 network address. Stores network address with netmask. Rejects values with non-zero bits to the right of the netmask.",@"description of cidr")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLTextType,
-				@"TEXT[(M)]",
-				[NSString stringWithFormat:NSLocalizedString(@"M: %@ to %@ characters", @"range for text type"),FN(@0),FN(@(65535))],
-				NSLocalizedString(@"A character string that can store up to M bytes, but requires less space for shorter values. The actual number of characters is further limited by the used encoding. Unlike VARCHAR this type does not count towards the maximum row length.",@"description of text")
+				SPPostgresInetType,
+				@"inet",
+				NSLocalizedString(@"IPv4: 7 bytes, IPv6: 19 bytes", @"storage for inet type"),
+				NSLocalizedString(@"IPv4 or IPv6 host address with optional netmask. Can store both host addresses and network addresses. More permissive than cidr.",@"description of inet")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLMediumTextType,
-				@"MEDIUMTEXT",
-				[NSString stringWithFormat:NSLocalizedString(@"Up to %@ characters (16 MiB)", @"range for mediumtext type"),FN(@16777215)],
-				NSLocalizedString(@"A character string with variable length. The actual number of characters is further limited by the used encoding. Unlike VARCHAR this type does not count towards the maximum row length.",@"description of mediumtext")
+				SPPostgresMacAddrType,
+				@"macaddr",
+				NSLocalizedString(@"Storage: 6 bytes", @"storage for macaddr type"),
+				NSLocalizedString(@"MAC address (Media Access Control address). Accepts various formats: '08:00:2b:01:02:03', '08-00-2b-01-02-03', '08002b010203', etc.",@"description of macaddr")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLLongTextType,
-				@"LONGTEXT",
-				[NSString stringWithFormat:NSLocalizedString(@"M: %@ to %@ characters (4 GiB)", @"range for longtext type"),FN(@0),FN(@4294967295)],
-				NSLocalizedString(@"A character string with variable length. The actual number of characters is further limited by the used encoding. Unlike VARCHAR this type does not count towards the maximum row length.",@"description of longtext")
+				SPPostgresMacAddr8Type,
+				@"macaddr8",
+				NSLocalizedString(@"Storage: 8 bytes", @"storage for macaddr8 type"),
+				NSLocalizedString(@"MAC address (EUI-64 format). Stores MAC addresses in 8-byte format. Can accept 6-byte input and convert to 8-byte EUI-64 format.",@"description of macaddr8")
+			),
+			// ==================== BIT STRING TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresBitType,
+				@"bit(n)",
+				NSLocalizedString(@"n: number of bits (must match exactly)", @"range for bit type"),
+				NSLocalizedString(@"Fixed-length bit string. Data must be exactly n bits. Storage varies with n.",@"description of bit")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLTinyBlobType,
-				@"TINYBLOB",
-				NSLocalizedString(@"Up to 255 bytes", @"range for tinyblob type"),
-				NSLocalizedString(@"A byte array with variable length. Unlike VARBINARY this type does not count towards the maximum row length.",@"description of tinyblob")
+				SPPostgresBitVaryingType,
+				@"bit varying(n)",
+				NSLocalizedString(@"n: maximum number of bits", @"range for bit varying type"),
+				NSLocalizedString(@"Variable-length bit string with maximum length n. Alias: varbit(n). If n is omitted, allows any length.",@"description of bit varying")
+			),
+			// ==================== GEOMETRIC TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresPointType,
+				@"point",
+				NSLocalizedString(@"Format: (x,y)", @"format for point type"),
+				NSLocalizedString(@"Point on a plane. Storage: 16 bytes (two float8). Foundation for other geometric types.",@"description of point")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLMediumBlobType,
-				@"MEDIUMBLOB",
-				[NSString stringWithFormat:NSLocalizedString(@"Up to %@ bytes (16 MiB)", @"range for mediumblob type"),FN(@16777215)],
-				NSLocalizedString(@"A byte array with variable length. Unlike VARBINARY this type does not count towards the maximum row length.",@"description of mediumblob")
+				SPPostgresLineType,
+				@"line",
+				NSLocalizedString(@"Format: {A,B,C} where Ax+By+C=0", @"format for line type"),
+				NSLocalizedString(@"Infinite line represented by linear equation Ax + By + C = 0. Storage: 32 bytes.",@"description of line")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLBlobType,
-				@"BLOB[(M)]",
-				[NSString stringWithFormat:NSLocalizedString(@"M: %@ to %@ bytes", @"range for blob type"),FN(@0),FN(@65535)],
-				NSLocalizedString(@"A byte array with variable length. Unlike VARBINARY this type does not count towards the maximum row length.",@"description of blob")
+				SPPostgresLsegType,
+				@"lseg",
+				NSLocalizedString(@"Format: [(x1,y1),(x2,y2)]", @"format for lseg type"),
+				NSLocalizedString(@"Line segment represented by two endpoints. Storage: 32 bytes.",@"description of lseg")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLLongBlobType,
-				@"LONGBLOB",
-				[NSString stringWithFormat:NSLocalizedString(@"Up to %@ bytes (4 GiB)", @"range for longblob type"),FN(@4294967295)],
-				NSLocalizedString(@"A byte array with variable length. Unlike VARBINARY this type does not count towards the maximum row length.",@"description of longblob")
+				SPPostgresBoxType,
+				@"box",
+				NSLocalizedString(@"Format: ((x1,y1),(x2,y2))", @"format for box type"),
+				NSLocalizedString(@"Rectangular box represented by opposite corners. Storage: 32 bytes. Corners are reordered to store upper right and lower left.",@"description of box")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLBinaryType,
-				@"BINARY(M)",
-				NSLocalizedString(@"M: 0 to 255 bytes", @"range for binary type"),
-				NSLocalizedString(@"A byte array with fixed length. Shorter values will always be padded to the right with 0x00 until they fit M.",@"description of binary")
+				SPPostgresPathType,
+				@"path",
+				NSLocalizedString(@"Format: [(x1,y1),...] or ((x1,y1),...)", @"format for path type"),
+				NSLocalizedString(@"Geometric path. Can be open (square brackets) or closed (parentheses). Storage: 16+16n bytes.",@"description of path")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLVarBinaryType,
-				@"VARBINARY(M)",
-				[NSString stringWithFormat:NSLocalizedString(@"M: %@ to %@ bytes", @"range for varbinary type"),FN(@0),FN(@(65535))],
-				NSLocalizedString(@"A byte array with variable length. The actual number of bytes is further limited by the values of other fields in the row.",@"description of varbinary")
+				SPPostgresPolygonType,
+				@"polygon",
+				NSLocalizedString(@"Format: ((x1,y1),...)", @"format for polygon type"),
+				NSLocalizedString(@"Closed geometric path (polygon). Similar to closed path. Storage: 40+16n bytes.",@"description of polygon")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLJsonType,
-				@"JSON",
-				NSLocalizedString(@"Limited to @@max_allowed_packet", @"range for json type"),
-				NSLocalizedString(@"A data type that validates JSON data on INSERT and internally stores it in a binary format that is both, more compact and faster to access than textual JSON.\nAvailable from MySQL 5.7.8.", @"description of json")
+				SPPostgresCircleType,
+				@"circle",
+				NSLocalizedString(@"Format: <(x,y),r>", @"format for circle type"),
+				NSLocalizedString(@"Circle represented by center point and radius. Storage: 24 bytes.",@"description of circle")
+			),
+			// ==================== RANGE TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresInt4RangeType,
+				@"int4range",
+				NSLocalizedString(@"Range of integer values", @"description for int4range type"),
+				NSLocalizedString(@"Range of integer. Example: '[1,10)' includes 1-9. Supports empty, infinite, and inclusive/exclusive bounds.",@"description of int4range")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLEnumType,
-				@"ENUM('member',...)",
-				[NSString stringWithFormat:NSLocalizedString(@"Up to %@ distinct members (<%@ in practice)\n1-2 bytes storage", @"range for enum type"),FN(@(65535)),FN(@3000)],
-				NSLocalizedString(@"Defines a list of members, of which every field can use at most one. Values are sorted by their index number (starting at 0 for the first member).",@"description of enum")
+				SPPostgresInt8RangeType,
+				@"int8range",
+				NSLocalizedString(@"Range of bigint values", @"description for int8range type"),
+				NSLocalizedString(@"Range of bigint. Supports same operations as int4range but for larger integers.",@"description of int8range")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLSetType,
-				@"SET('member',...)",
-				NSLocalizedString(@"Range: 1 to 64 members\n1, 2, 3, 4 or 8 bytes storage", @"range for set type"),
-				NSLocalizedString(@"A SET can define up to 64 members (as strings) of which a field can use one or more using a comma-separated list. Upon insertion the order of members is automatically normalized and duplicate members will be eliminated. Assignment of numbers is supported using the same semantics as for BIT types.",@"description of set")
-			),
-			// --------------------------------------------------------------------------
-			MakeFieldTypeHelp(
-				SPMySQLDateType,
-				@"DATE",
-				NSLocalizedString(@"Range: 1000-01-01 to 9999-12-31", @"range for date type"),
-				NSLocalizedString(@"Stores a date without time information. The representation is YYYY-MM-DD. The value is not affected by any time zone setting. Invalid values are converted to 0000-00-00.",@"description of date")
+				SPPostgresNumRangeType,
+				@"numrange",
+				NSLocalizedString(@"Range of numeric values", @"description for numrange type"),
+				NSLocalizedString(@"Range of numeric. Useful for continuous numeric ranges where exact precision is required.",@"description of numrange")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLDatetimeType,
-				@"DATETIME[(F)]",
-				NSLocalizedString(@"Range: 1000-01-01 00:00:00.0 to 9999-12-31 23:59:59.999999\nF (precision): 0 (1s) to 6 (1µs)", @"range for datetime type"),
-				NSLocalizedString(@"Stores a date and time of day. The representation is YYYY-MM-DD HH:MM:SS[.I*], I being fractional seconds. The value is not affected by any time zone setting. Invalid values are converted to 0000-00-00 00:00:00.0. Fractional seconds were added in MySQL 5.6.4 with a precision down to microseconds (6), specified by F.",@"description of datetime")
+				SPPostgresTsRangeType,
+				@"tsrange",
+				NSLocalizedString(@"Range of timestamp without time zone", @"description for tsrange type"),
+				NSLocalizedString(@"Range of timestamp without time zone. Useful for scheduling and time period operations.",@"description of tsrange")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLTimestampType,
-				@"TIMETSTAMP[(F)]",
-				NSLocalizedString(@"Range: 1970-01-01 00:00:01.0 to 2038-01-19 03:14:07.999999\nF (precision): 0 (1s) to 6 (1µs)", @"range for timestamp type"),
-				NSLocalizedString(@"Stores a date and time of day as seconds since the beginning of the UNIX epoch (1970-01-01 00:00:00). The values displayed/stored are affected by the connection's @@time_zone setting.\nThe representation is the same as for DATETIME. Invalid values, as well as \"second zero\", are converted to 0000-00-00 00:00:00.0. Fractional seconds were added in MySQL 5.6.4 with a precision down to microseconds (6), specified by F. Some additional rules may apply.",@"description of timestamp")
+				SPPostgresTsTZRangeType,
+				@"tstzrange",
+				NSLocalizedString(@"Range of timestamp with time zone", @"description for tstzrange type"),
+				NSLocalizedString(@"Range of timestamp with time zone. Time zone aware scheduling and time period operations.",@"description of tstzrange")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLTimeType,
-				@"TIME[(F)]",
-				NSLocalizedString(@"Range: -838:59:59.0 to 838:59:59.0\nF (precision): 0 (1s) to 6 (1µs)", @"range for time type"),
-				NSLocalizedString(@"Stores a time of day, duration or time interval. The representation is HH:MM:SS[.I*], I being fractional seconds. The value is not affected by any time zone setting. Invalid values are converted to 00:00:00. Fractional seconds were added in MySQL 5.6.4 with a precision down to microseconds (6), specified by F.",@"description of time")
+				SPPostgresDateRangeType,
+				@"daterange",
+				NSLocalizedString(@"Range of date values", @"description for daterange type"),
+				NSLocalizedString(@"Range of date. Useful for date-based intervals and period calculations.",@"description of daterange")
+			),
+			// ==================== OTHER TYPES ====================
+			MakeFieldTypeHelp(
+				SPPostgresXMLType,
+				@"xml",
+				NSLocalizedString(@"Variable length", @"range for xml type"),
+				NSLocalizedString(@"XML data type. Validates well-formedness on input. Supports XPath queries and XML functions.",@"description of xml")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLYearType,
-				@"YEAR(4)",
-				NSLocalizedString(@"Range: 0000, 1901 to 2155", @"range for year type"),
-				NSLocalizedString(@"Represents a 4 digit year value, stored as 1 byte. Invalid values are converted to 0000 and two digit values 0 to 69 will be converted to years 2000 to 2069, resp. values 70 to 99 to years 1970 to 1999.\nThe YEAR(2) type was removed in MySQL 5.7.5.",@"description of year")
-			),
-			// --------------------------------------------------------------------------
-			MakeFieldTypeHelp(
-				SPMySQLGeometryType,
-				@"GEOMETRY",
-				@"",
-				NSLocalizedString(@"Can store a single spatial value of types POINT, LINESTRING or POLYGON. Spatial support in MySQL is based on the OpenGIS Geometry Model.",@"description of geometry")
+				SPPostgresTsVectorType,
+				@"tsvector",
+				NSLocalizedString(@"Variable length, sorted list of lexemes", @"range for tsvector type"),
+				NSLocalizedString(@"Text search document. Sorted list of distinct lexemes (normalized words) with optional position and weight information. Use to_tsvector() to create.",@"description of tsvector")
 			),
 			MakeFieldTypeHelp(
-				SPMySQLPointType,
-				@"POINT",
-				@"",
-				NSLocalizedString(@"Represents a single location in coordinate space using X and Y coordinates. The point is zero-dimensional.",@"description of point")
-			),
-			MakeFieldTypeHelp(
-				SPMySQLLineStringType,
-				@"LINESTRING",
-				@"",
-				NSLocalizedString(@"Represents an ordered set of coordinates where each consecutive pair of two points is connected by a straight line.",@"description of linestring")
-			),
-			MakeFieldTypeHelp(
-				SPMySQLPolygonType,
-				@"POLYGON",
-				@"",
-				NSLocalizedString(@"Creates a surface by combining one LinearRing (ie. a LineString that is closed and simple) as the outside boundary with zero or more inner LinearRings acting as \"holes\".",@"description of polygon")
-			),
-			MakeFieldTypeHelp(
-				SPMySQLMultiPointType,
-				@"MULTIPOINT",
-				@"",
-				NSLocalizedString(@"Represents a set of Points without specifying any kind of relation and/or order between them.",@"description of multipoint")
-			),
-			MakeFieldTypeHelp(
-				SPMySQLMultiLineStringType,
-				@"MULTILINESTRING",
-				@"",
-				NSLocalizedString(@"Represents a collection of LineStrings.",@"description of multilinestring")
-			),
-			MakeFieldTypeHelp(
-				SPMySQLMultiPolygonType,
-				@"MULTIPOLYGON",
-				@"",
-				NSLocalizedString(@"Represents a collection of Polygons. The Polygons making up the MultiPolygon must not intersect.",@"description of multipolygon")
-			),
-			MakeFieldTypeHelp(
-				SPMySQLGeometryCollectionType,
-				@"GEOMETRYCOLLECTION",
-				@"",
-				NSLocalizedString(@"Represents a collection of objects of any other single- or multi-valued spatial type. The only restriction being, that all objects must share a common coordinate system.",@"description of geometrycollection")
+				SPPostgresTsQueryType,
+				@"tsquery",
+				NSLocalizedString(@"Variable length", @"range for tsquery type"),
+				NSLocalizedString(@"Text search query. Normalized lexemes combined with Boolean operators (& | !) and phrase search. Use to_tsquery() or plainto_tsquery() to create.",@"description of tsquery")
 			),
 		];
 #undef FN
-#undef INTR
 	});
 
 	for (SPFieldTypeHelp *item in list) {

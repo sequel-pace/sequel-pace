@@ -34,7 +34,8 @@
 #import "SPExportUtilities.h"
 #import "SPExportController.h"
 #import "SPFunctions.h"
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
+#import "SPPostgresGeometryData.h"
 
 @implementation SPXMLExporter
 
@@ -73,9 +74,9 @@
     NSString *dataConversionString = nil;
 
     // Result sets
-    SPMySQLResult *statusResult = nil;
-    SPMySQLResult *structureResult = nil;
-    SPMySQLFastStreamingResult *streamingResult = nil;
+    SPPostgresResult *statusResult = nil;
+    SPPostgresResult *structureResult = nil;
+    SPPostgresStreamingResult *streamingResult = nil;
 
     NSMutableArray *xmlTags    = [NSMutableArray array];
     NSMutableString *xmlString = [NSMutableString string];
@@ -88,7 +89,7 @@
     // Check to see if we have at least a table name or data array
     if ((![self xmlTableName] && ![self xmlDataArray]) ||
         ([[self xmlTableName] length] == 0 && [[self xmlDataArray] count] == 0) ||
-        (([self xmlFormat] == SPXMLExportMySQLFormat) && ((![self xmlOutputIncludeStructure]) && (![self xmlOutputIncludeContent]))) ||
+        (([self xmlFormat] == SPXMLExportPostgresFormat) && ((![self xmlOutputIncludeStructure]) && (![self xmlOutputIncludeContent]))) ||
         (([self xmlFormat] == SPXMLExportPlainFormat) && (![self xmlNULLString])))
     {
         return;
@@ -105,56 +106,89 @@
 
         isTableExport = YES;
 
-        totalRows       = [[connection getFirstFieldFromQuery:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [[self xmlTableName] backtickQuotedString]]] integerValue];
-        streamingResult = [connection streamingQueryString:[NSString stringWithFormat:@"SELECT * FROM %@", [[self xmlTableName] backtickQuotedString]] useLowMemoryBlockingStreaming:[self exportUsingLowMemoryBlockingStreaming]];
+        totalRows       = [[connection getFirstFieldFromQuery:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [[self xmlTableName] postgresQuotedIdentifier]]] integerValue];
+        streamingResult = [connection streamingQueryString:[NSString stringWithFormat:@"SELECT * FROM %@", [[self xmlTableName] postgresQuotedIdentifier]] useLowMemoryBlockingStreaming:[self exportUsingLowMemoryBlockingStreaming]];
 
         // Only include the structure if necessary
-        if (([self xmlFormat] == SPXMLExportMySQLFormat) && [self xmlOutputIncludeStructure]) {
+        if (([self xmlFormat] == SPXMLExportPostgresFormat) && [self xmlOutputIncludeStructure]) {
 
-            structureResult = [connection queryString:[NSString stringWithFormat:@"SHOW COLUMNS FROM %@", [[self xmlTableName] backtickQuotedString]]];
-            NSMutableString *escapedTableName = [NSMutableString stringWithString:[[self xmlTableName] tickQuotedString]];
-            [escapedTableName replaceOccurrencesOfString:@"\\" withString:@"\\\\\\\\" options:0 range:NSMakeRange(0, [escapedTableName length])];
-            statusResult    = [connection queryString:[NSString stringWithFormat:@"SHOW TABLE STATUS LIKE %@", escapedTableName]];
+            // PostgreSQL: Get column information with key information
+            structureResult = [connection queryString:[NSString stringWithFormat:
+                @"SELECT c.column_name AS \"Field\", c.data_type AS \"Type\", c.is_nullable AS \"Null\", "
+                @"c.column_default AS \"Default\", "
+                @"CASE WHEN pk.column_name IS NOT NULL THEN 'PRI' ELSE '' END AS \"Key\", "
+                @"CASE WHEN c.column_default LIKE 'nextval%%' THEN 'auto_increment' ELSE '' END AS \"Extra\" "
+                @"FROM information_schema.columns c "
+                @"LEFT JOIN (SELECT kcu.column_name FROM information_schema.table_constraints tc "
+                @"JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name "
+                @"WHERE tc.table_name = %@ AND tc.constraint_type = 'PRIMARY KEY') pk "
+                @"ON c.column_name = pk.column_name "
+                @"WHERE c.table_name = %@ AND c.table_schema = 'public' "
+                @"ORDER BY c.ordinal_position",
+                [[self xmlTableName] tickQuotedString], [[self xmlTableName] tickQuotedString]]];
 
-            if ([structureResult numberOfRows] && [statusResult numberOfRows]) {
+            // PostgreSQL: Get table statistics from pg_stat_user_tables and pg_class
+            statusResult = [connection queryString:[NSString stringWithFormat:
+                @"SELECT c.relname AS \"Name\", 'PostgreSQL' AS \"Engine\", "
+                @"current_setting('server_version') AS \"Version\", "
+                @"CASE c.relkind WHEN 'r' THEN 'table' WHEN 'v' THEN 'view' ELSE c.relkind::text END AS \"Row_format\", "
+                @"c.reltuples::bigint AS \"Rows\", "
+                @"CASE WHEN c.reltuples > 0 THEN (pg_table_size(c.oid) / NULLIF(c.reltuples, 0))::bigint ELSE 0 END AS \"Avg_row_length\", "
+                @"pg_table_size(c.oid) AS \"Data_length\", "
+                @"0 AS \"Max_data_length\", "
+                @"pg_indexes_size(c.oid) AS \"Index_length\", "
+                @"0 AS \"Data_free\", "
+                @"NULL AS \"Create_time\", "
+                @"s.last_vacuum AS \"Update_time\", "
+                @"'UTF8' AS \"Collation\", "
+                @"'' AS \"Create_options\", "
+                @"obj_description(c.oid) AS \"Comment\" "
+                @"FROM pg_class c "
+                @"LEFT JOIN pg_stat_user_tables s ON c.relname = s.relname "
+                @"WHERE c.relname = %@ AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')",
+                [[self xmlTableName] tickQuotedString]]];
+
+            if ([structureResult numberOfRows]) {
 
                 [xmlString appendFormat:@"\t<table_structure name=\"%@\">\n", [self xmlTableName]];
 
                 for (NSDictionary *row in structureResult)
                 {
                     [xmlString appendFormat:@"\t\t<field field=\"%@\" type=\"%@\" null=\"%@\" key=\"%@\" default=\"%@\" extra=\"%@\" />\n",
-                     [row objectForKey:@"Field"],
-                     [row objectForKey:@"Type"],
-                     [row objectForKey:@"Null"],
-                     [row objectForKey:@"Key"],
-                     [row objectForKey:@"Default"],
-                     [row objectForKey:@"Extra"]];
+                     [row objectForKey:@"Field"] ?: @"",
+                     [row objectForKey:@"Type"] ?: @"",
+                     [row objectForKey:@"Null"] ?: @"",
+                     [row objectForKey:@"Key"] ?: @"",
+                     [row objectForKey:@"Default"] ?: @"",
+                     [row objectForKey:@"Extra"] ?: @""];
                 }
 
-                NSDictionary *row = [statusResult getRowAsDictionary];
+                if ([statusResult numberOfRows]) {
+                    NSDictionary *row = [statusResult getRowAsDictionary];
 
-                [xmlString appendFormat:@"\n\t\t<options name=\"%@\" engine=\"%@\" version=\"%@\" row_format=\"%@\" rows=\"%@\" avg_row_length=\"%@\" data_length=\"%@\" max_data_length=\"%@\" index_length=\"%@\" data_free=\"%@\" create_time=\"%@\" update_time=\"%@\" collation=\"%@\" create_options=\"%@\" comment=\"%@\" />\n",
-                 [row objectForKey:@"Name"],
-                 [row objectForKey:@"Engine"],
-                 [row objectForKey:@"Version"],
-                 [row objectForKey:@"Row_format"],
-                 [row objectForKey:@"Rows"],
-                 [row objectForKey:@"Avg_row_length"],
-                 [row objectForKey:@"Data_length"],
-                 [row objectForKey:@"Max_data_length"],
-                 [row objectForKey:@"Index_length"],
-                 [row objectForKey:@"Data_free"],
-                 [row objectForKey:@"Create_time"],
-                 [row objectForKey:@"Update_time"],
-                 [row objectForKey:@"Collation"],
-                 [row objectForKey:@"Create_options"],
-                 [row objectForKey:@"Comment"]];
+                    [xmlString appendFormat:@"\n\t\t<options name=\"%@\" engine=\"%@\" version=\"%@\" row_format=\"%@\" rows=\"%@\" avg_row_length=\"%@\" data_length=\"%@\" max_data_length=\"%@\" index_length=\"%@\" data_free=\"%@\" create_time=\"%@\" update_time=\"%@\" collation=\"%@\" create_options=\"%@\" comment=\"%@\" />\n",
+                     [row objectForKey:@"Name"] ?: @"",
+                     [row objectForKey:@"Engine"] ?: @"",
+                     [row objectForKey:@"Version"] ?: @"",
+                     [row objectForKey:@"Row_format"] ?: @"",
+                     [row objectForKey:@"Rows"] ?: @"",
+                     [row objectForKey:@"Avg_row_length"] ?: @"",
+                     [row objectForKey:@"Data_length"] ?: @"",
+                     [row objectForKey:@"Max_data_length"] ?: @"",
+                     [row objectForKey:@"Index_length"] ?: @"",
+                     [row objectForKey:@"Data_free"] ?: @"",
+                     [row objectForKey:@"Create_time"] ?: @"",
+                     [row objectForKey:@"Update_time"] ?: @"",
+                     [row objectForKey:@"Collation"] ?: @"",
+                     [row objectForKey:@"Create_options"] ?: @"",
+                     [row objectForKey:@"Comment"] ?: @""];
+                }
 
                 [xmlString appendFormat:@"\t</table_structure>\n\n"];
             }
         }
 
-        if (([self xmlFormat] == SPXMLExportMySQLFormat) && [self xmlOutputIncludeContent]) {
+        if (([self xmlFormat] == SPXMLExportPostgresFormat) && [self xmlOutputIncludeContent]) {
             [xmlString appendFormat:@"\t<table_data name=\"%@\">\n\n", [self xmlTableName]];
         }
 
@@ -268,14 +302,14 @@
                         [xmlItem setString:[self xmlNULLString]];
                     }
                 }
-                else if ([data isKindOfClass:[SPMySQLGeometryData class]]) {
+                else if ([data isKindOfClass:[SPPostgresGeometryData class]]) {
                     [xmlItem setString:[data wktString]];
                 }
                 else {
                     [xmlItem setString:[data description]];
                 }
 
-                if ([self xmlFormat] == SPXMLExportMySQLFormat) {
+                if ([self xmlFormat] == SPXMLExportPostgresFormat) {
                     [xmlString appendFormat:@"\t\t<field name=\"%@\"", [[[fieldNames safeObjectAtIndex:i] description] HTMLEscapeString]];
 
                     if (dataIsNULL) {
@@ -318,7 +352,7 @@
             if ([self xmlDataArray] && totalRows == currentRowIndex) break;
         }
 
-        if (([self xmlFormat] == SPXMLExportMySQLFormat) && isTableExport) {
+        if (([self xmlFormat] == SPXMLExportPostgresFormat) && isTableExport) {
             [self writeString:@"\t</table_data>\n\n"];
         }
         else if ([self xmlFormat] == SPXMLExportPlainFormat) {

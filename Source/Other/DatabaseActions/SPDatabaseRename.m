@@ -34,7 +34,7 @@
 #import "SPTablesList.h"
 #import "SPCreateDatabaseInfo.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 @interface SPDatabaseRename ()
 
@@ -116,7 +116,7 @@
 {
     SPLog(@"_dropDatabase: %@", database);
 
-	[connection queryString:[NSString stringWithFormat:@"DROP DATABASE %@", [database backtickQuotedString]]];	
+	[connection queryString:[NSString stringWithFormat:@"DROP DATABASE %@", [database postgresQuotedIdentifier]]];	
 	
 	return ![connection queryErrored];
 }

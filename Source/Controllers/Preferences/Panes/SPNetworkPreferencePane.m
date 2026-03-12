@@ -33,7 +33,7 @@
 #import "SPAppController.h"
 #import "SPPreferenceController.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 static NSString *SPSSLCipherListMarkerItem = @"--";
 static NSString *SPSSLCipherPboardTypeName = @"SSLCipherPboardType";
@@ -694,8 +694,8 @@ static NSString *SPSSLCipherPboardTypeName = @"SSLCipherPboardType";
     static NSArray *defaultSSLCipherList;
 
     dispatch_once(&token, ^{
-        //this is the default list as hardcoded in SPMySQLConnection.m
-        //Sadly there is no way to make MySQL give us the list of runtime-supported ciphers.
+        // Default SSL cipher list for PostgreSQL connections
+        // PostgreSQL supports these common TLS cipher suites
         defaultSSLCipherList = @[
             @"ECDHE-ECDSA-AES256-GCM-SHA384",
             @"ECDHE-ECDSA-AES128-GCM-SHA256",

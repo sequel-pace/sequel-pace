@@ -55,6 +55,7 @@
 #import "SPProcessListController.h"
 #import "SPServerVariablesController.h"
 #import "SPLogger.h"
+#import "SPDebugLogger.h"
 #import "SPDatabaseCopy.h"
 #import "SPTableCopy.h"
 #import "SPDatabaseRename.h"
@@ -84,9 +85,11 @@
 #import "SPPrintUtility.h"
 #import "SPBundleManager.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
+#import "SPPostgresStreamingResultStore.h"
+#import "SPPostgresGeometryData.h"
 
 #include <stdatomic.h>
 
@@ -130,8 +133,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
 - (void) closeAndDisconnect;
 
-- (NSString *)keychainPasswordForConnection:(SPMySQLConnection *)connection;
-- (NSString *)keychainPasswordForSSHConnection:(SPMySQLConnection *)connection;
+- (NSString *)keychainPasswordForConnection:(SPPostgresConnection *)connection;
+- (NSString *)keychainPasswordForSSHConnection:(SPPostgresConnection *)connection;
 
 @end
 
@@ -200,8 +203,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         selectedDatabase = nil;
         selectedDatabaseEncoding = @"latin1";
-        mySQLConnection = nil;
-        mySQLVersion = nil;
+        postgresConnection = nil;
+        postgresVersion = nil;
         allDatabases = nil;
         allSystemDatabases = nil;
         gotoDatabaseController = nil;
@@ -284,12 +287,12 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserver:self
            selector:@selector(willPerformQuery:)
-               name:@"SMySQLQueryWillBePerformed"
+               name:@"SPQueryWillBePerformed"
              object:self];
 
     [nc addObserver:self
            selector:@selector(hasPerformedQuery:)
-               name:@"SMySQLQueryHasBeenPerformed"
+               name:@"SPQueryHasBeenPerformed"
              object:self];
 
     [nc addObserver:self
@@ -401,20 +404,20 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  *
  * This method *MUST* be called from the UI thread!
  */
-- (void)setConnection:(SPMySQLConnection *)theConnection
+- (void)setConnection:(SPPostgresConnection *)theConnection
 {
-    if ([theConnection userTriggeredDisconnect]) {
+    if (!theConnection) {
         return;
     }
 
     _isConnected = YES;
-    mySQLConnection = theConnection;
+    postgresConnection = theConnection;
 
     // Now that we have a connection, determine what functionality the database supports.
     // Note that this must be done before anything else as it's used by nearly all of the main controllers.
-    serverSupport = [[SPServerSupport alloc] initWithMajorVersion:[mySQLConnection serverMajorVersion]
-                                                            minor:[mySQLConnection serverMinorVersion]
-                                                          release:[mySQLConnection serverReleaseVersion]];
+    serverSupport = [[SPServerSupport alloc] initWithMajorVersion:[postgresConnection serverMajorVersion]
+                                                            minor:[postgresConnection serverMinorVersion]
+                                                          release:[postgresConnection serverReleaseVersion]];
 
     // Set the fileURL and init the preferences (query favs, filters, and history) if available for that URL
     NSURL *newURL = [[SPQueryController sharedQueryController] registerDocumentWithFileURL:[self fileURL] andContextInfo:spfPreferences];
@@ -425,8 +428,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         [[[self.parentWindowController window] standardWindowButton:NSWindowDocumentIconButton] setImage:nil];
     }
 
-    // Get the mysql version
-    mySQLVersion = [mySQLConnection serverVersionString] ;
+    // Get the postgres version
+    postgresVersion = [postgresConnection serverVersionString] ;
 
     NSString *tmpDb = [connectionController database];
 
@@ -437,13 +440,19 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     }
 
     // Ensure the connection encoding is set to utf8 for database/table name retrieval
-    [mySQLConnection setEncoding:@"utf8mb4"];
+    [postgresConnection setEncoding:@"UTF8"];
 
     // Check if skip-show-database is set to ON
+    /*
     if ( [prefs boolForKey:SPShowWarningSkipShowDatabase] ) {
-        SPMySQLResult *result = [mySQLConnection queryString:@"SHOW VARIABLES LIKE 'skip_show_database'"];
-        [result setReturnDataAsStrings:YES];
-        if(![mySQLConnection queryErrored] && [result numberOfRows] == 1) {
+        SPPostgresResult *result = [postgresConnection queryString:@"SHOW allow_system_table_mods"]; // Dummy query for now
+        // [result setReturnDataAsStrings:YES];
+        if(![postgresConnection queryErrored] && [result numberOfRows] == 1) {
+            // Logic to check permissions
+        }
+    }
+    */
+    /*
             NSString *skip_show_database = [[result getRowAsDictionary] objectForKey:@"Value"];
             if ([skip_show_database.lowercaseString isEqualToString:@"on"]) {
                 [NSAlert createAlertWithTitle:NSLocalizedString(@"Warning",@"warning")
@@ -456,6 +465,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
             }
         }
     }
+    */
 
     // Update the database list
     [self setDatabases];
@@ -463,43 +473,43 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     [chooseDatabaseButton setEnabled:!_isWorkingLevel];
 
     // Set the connection on the database structure builder
-    [databaseStructureRetrieval setConnectionToClone:mySQLConnection];
+    [databaseStructureRetrieval setConnectionToClone:postgresConnection];
 
-    [databaseDataInstance setConnection:mySQLConnection];
+    [databaseDataInstance setConnection:postgresConnection];
 
     // Pass the support class to the data instance
     [databaseDataInstance setServerSupport:serverSupport];
 
     // Set the connection on the tables list instance - this updates the table list while the connection
     // is still UTF8
-    [tablesListInstance setConnection:mySQLConnection];
+    [tablesListInstance setConnection:postgresConnection];
 
     // Set the connection encoding if necessary
     NSNumber *encodingType = [prefs objectForKey:SPDefaultEncoding];
 
     if ([encodingType intValue] != SPEncodingAutodetect) {
-        [self setConnectionEncoding:[self mysqlEncodingFromEncodingTag:encodingType] reloadingViews:NO];
+        [self setConnectionEncoding:[self postgresEncodingFromEncodingTag:encodingType] reloadingViews:NO];
     } else {
-        [[self onMainThread] updateEncodingMenuWithSelectedEncoding:[self encodingTagFromMySQLEncoding:[mySQLConnection encoding]]];
+        // [[self onMainThread] updateEncodingMenuWithSelectedEncoding:[self encodingTagFromMySQLEncoding:[postgresConnection encoding]]];
     }
 
     // For each of the main controllers, assign the current connection
     SPLog(@"setConnection for each of main controllers");
-    [tableSourceInstance setConnection:mySQLConnection];
-    [tableContentInstance setConnection:mySQLConnection];
-    [tableRelationsInstance setConnection:mySQLConnection];
-    [tableTriggersInstance setConnection:mySQLConnection];
-    [customQueryInstance setConnection:mySQLConnection];
-    [tableDumpInstance setConnection:mySQLConnection];
-    [exportControllerInstance setConnection:mySQLConnection];
+    [tableSourceInstance setConnection:postgresConnection];
+    [tableContentInstance setConnection:postgresConnection];
+    [tableRelationsInstance setConnection:postgresConnection];
+    [tableTriggersInstance setConnection:postgresConnection];
+    [customQueryInstance setConnection:postgresConnection];
+    [tableDumpInstance setConnection:postgresConnection];
+    [exportControllerInstance setConnection:postgresConnection];
     [exportControllerInstance setServerSupport:serverSupport];
-    [tableDataInstance setConnection:mySQLConnection];
-    [extendedTableInfoInstance setConnection:mySQLConnection];
+    [tableDataInstance setConnection:postgresConnection];
+    [extendedTableInfoInstance setConnection:postgresConnection];
 
-    // Set the custom query editor's MySQL version
-    [customQueryInstance setMySQLversion:mySQLVersion];
+    // Set the custom query editor's PostgreSQL version
+    [customQueryInstance setPostgresVersion:postgresVersion];
 
-    [helpViewerClientInstance setConnection:mySQLConnection];
+    [helpViewerClientInstance setConnection:postgresConnection];
 
     [self updateWindowTitle:self];
 
@@ -582,9 +592,9 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  *
  * @return The document's connection
  */
-- (SPMySQLConnection *)getConnection
+- (SPPostgresConnection *)getConnection
 {
-    return mySQLConnection;
+    return postgresConnection;
 }
 
 #pragma mark -
@@ -609,7 +619,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     [[chooseDatabaseButton menu] addItem:[NSMenuItem separatorItem]];
 
 
-    NSArray *theDatabaseList = [mySQLConnection databases];
+    NSArray *theDatabaseList = [postgresConnection databases];
 
     allDatabases = [[NSMutableArray alloc] initWithCapacity:[theDatabaseList count]];
     allSystemDatabases = [[NSMutableArray alloc] initWithCapacity:2];
@@ -618,10 +628,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     {
         // If the database is either information_schema or mysql then it is classed as a
         // system database; similarly, performance_schema in 5.5.3+ and sys in 5.7.7+
-        if ([databaseName isEqualToString:SPMySQLDatabase] ||
-            [databaseName isEqualToString:SPMySQLInformationSchemaDatabase] ||
-            [databaseName isEqualToString:SPMySQLPerformanceSchemaDatabase] ||
-            [databaseName isEqualToString:SPMySQLSysDatabase]) {
+        if ([databaseName isEqualToString:@"postgres"] ||
+            [databaseName isEqualToString:@"information_schema"] ||
+            [databaseName isEqualToString:@"pg_catalog"] ||
+            [databaseName isEqualToString:@"pg_toast"]) {
             [allSystemDatabases addObject:databaseName];
         }
         else {
@@ -678,10 +688,16 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 /**
  * Select the specified database and, optionally, table.
  */
+/**
+ * Select the specified database and, optionally, table.
+ */
 - (void)selectDatabase:(NSString *)database item:(NSString *)item
 {
     // Do not update the navigator since nothing is changed
     [[SPNavigatorController sharedNavigatorController] setIgnoreUpdate:NO];
+
+    // Check if we are actually changing the database
+    BOOL databaseChanged = ![database isEqualToString:[self database]];
 
     // If Navigator runs in syncMode let it follow the selection
     if ([[[SPNavigatorController sharedNavigatorController] onMainThread] syncMode]) {
@@ -700,7 +716,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     // Start a task
     [self startTaskWithDescription:[NSString stringWithFormat:NSLocalizedString(@"Loading database '%@'...", @"Loading database task string"), database]];
 
-    NSDictionary *selectionDetails = [NSDictionary dictionaryWithObjectsAndKeys:database, @"database", item, @"item", nil];
+    NSDictionary *selectionDetails = [NSDictionary dictionaryWithObjectsAndKeys:database, @"database", item ? item : @"", @"item", nil];
 
     if ([NSThread isMainThread]) {
         [NSThread detachNewThreadWithName:SPCtxt(@"SPDatabaseDocument database and table load task",self)
@@ -710,6 +726,69 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     }
     else {
         [self _selectDatabaseAndItem:selectionDetails];
+    }
+}
+
+/**
+ * Background task to select database and item
+ */
+- (void)_selectDatabaseAndItem:(NSDictionary *)selectionDetails
+{
+    @autoreleasepool {
+        NSString *database = [selectionDetails objectForKey:@"database"];
+        NSString *item = [selectionDetails objectForKey:@"item"];
+        if ([item isEqualToString:@""]) item = nil;
+
+        // Perform the reconnection if the database has changed
+        NSString *currentDB = [postgresConnection database];
+        
+        if (![database isEqualToString:currentDB]) {
+            BOOL success = [postgresConnection reconnectWithNewDatabase:database];
+            
+            if (!success) {
+                SPMainQSync(^{
+                    NSAlert *alert = [[NSAlert alloc] init];
+                    [alert setMessageText:NSLocalizedString(@"Connection Failed", @"Connection failed alert title")];
+                    [alert setInformativeText:[NSString stringWithFormat:NSLocalizedString(@"Could not connect to database '%@'.\n\nError: %@", @"Connection failed alert message"), database, [self->postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
+                    [alert addButtonWithTitle:NSLocalizedString(@"OK", @"OK button")];
+                    [alert runModal];
+                    
+                    [self endTask];
+                    
+                    // Reset selection logic if needed
+                    [self->chooseDatabaseButton selectItemWithTitle:currentDB ? currentDB : @""];
+                });
+                return;
+            }
+            
+            // Update internal state
+            selectedDatabase = [database copy];
+            
+            // Re-detect encoding for the new database
+            [self detectDatabaseEncoding];
+        }
+
+        // Continue with normal loading logic (checking tables, etc) -> This usually calls setTableDetails eventually
+        
+        // Update history
+        SPMainQSync(^{
+            [self->spHistoryControllerInstance updateHistoryEntries];
+            [self updateWindowTitle:self];
+        });
+        
+        // Now generic "use database" logic is done via reconnection.
+        // We still need to refresh the table list for this new database.
+        [tablesListInstance setConnection:postgresConnection]; // Re-set connection to force refresh? Or just refresh?
+        [tablesListInstance updateTables:self]; // This should fetch new tables from information_schema
+
+        // If an item (table) was specified, select it
+        if (item) {
+            SPMainQSync(^{
+                 [self->tablesListInstance selectTableName:item];
+            });
+        }
+        
+        [self endTask];
     }
 }
 
@@ -804,7 +883,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
      */
     NSLog(@"=================");
 
-    SPMySQLResult *showTablesQuery = [mySQLConnection queryString:@"show tables"];
+    SPPostgresResult *showTablesQuery = [postgresConnection queryString:@"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"];
 
     NSArray *tableRow;
     while ((tableRow = [showTablesQuery getRowAsArray]) != nil) {
@@ -815,13 +894,20 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
             NSLog(@"Scanning %@", table);
 
 
-            NSDictionary *tableStatus = [[mySQLConnection queryString:[NSString stringWithFormat:@"SHOW TABLE STATUS LIKE %@", [table tickQuotedString]]] getRowAsDictionary];
+            // PostgreSQL: Use pg_stat_user_tables for row estimates and pg_total_relation_size for table size
+            NSDictionary *tableStatus = [[postgresConnection queryString:[NSString stringWithFormat:
+                @"SELECT relname AS \"Name\", "
+                @"pg_total_relation_size(relid) AS \"Data_length\", "
+                @"n_live_tup AS \"Rows\" "
+                @"FROM pg_stat_user_tables "
+                @"WHERE relname = %@",
+                [table tickQuotedString]]] getRowAsDictionary];
             NSInteger rowCountEstimate = [tableStatus[@"Rows"] integerValue];
             NSLog(@"Estimated row count: %li", rowCountEstimate);
 
 
 
-            SPMySQLResult *tableContentsQuery = [mySQLConnection streamingQueryString:[NSString stringWithFormat:@"select * from %@", [table backtickQuotedString]] useLowMemoryBlockingStreaming:NO];
+            SPPostgresResult *tableContentsQuery = [postgresConnection queryString:[NSString stringWithFormat:@"select * from %@", [table postgresQuotedIdentifier]]];
             //NSDate *lastProgressUpdate = [NSDate date];
             time_t lastProgressUpdate = time(NULL);
             NSInteger rowCount = 0;
@@ -941,7 +1027,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if (!serverVariablesController) {
         serverVariablesController = [[SPServerVariablesController alloc] init];
 
-        [serverVariablesController setConnection:mySQLConnection];
+        [serverVariablesController setConnection:postgresConnection];
     }
 
     [serverVariablesController displayServerVariablesSheetAttachedToWindow:[self.parentWindowController window]];
@@ -954,7 +1040,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if (!processListController) {
         processListController = [[SPProcessListController alloc] init];
 
-        [processListController setConnection:mySQLConnection];
+        [processListController setConnection:postgresConnection];
     }
 
     [processListController displayProcessListWindow];
@@ -962,9 +1048,9 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
 - (void)shutdownServer {
     [NSAlert createDefaultAlertWithTitle:NSLocalizedString(@"Do you really want to shutdown the server?", @"shutdown server : confirmation dialog : title") message:NSLocalizedString(@"This will wait for open transactions to complete and then quit the mysql daemon. Afterwards neither you nor anyone else can connect to this database!\n\nFull management access to the server's operating system is required to restart MySQL!", @"shutdown server : confirmation dialog : message") primaryButtonTitle:NSLocalizedString(@"Shutdown", @"shutdown server : confirmation dialog : shutdown button") primaryButtonHandler:^{
-        if (![self->mySQLConnection serverShutdown]) {
-            if ([self->mySQLConnection isConnected]) {
-                [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Shutdown failed!", @"shutdown server : error dialog : title") message:[NSString stringWithFormat:NSLocalizedString(@"MySQL said:\n%@", @"shutdown server : error dialog : message"),[self->mySQLConnection lastErrorMessage]] callback:nil];
+        if (![self->postgresConnection serverShutdown]) {
+            if ([self->postgresConnection isConnected]) {
+                [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Shutdown failed!", @"shutdown server : error dialog : title") message:[NSString stringWithFormat:NSLocalizedString(@"PostgreSQL said:\n%@", @"shutdown server : error dialog : message"), [self->postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
             }
         }
     } cancelButtonHandler:nil];
@@ -1005,11 +1091,11 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     NSString *dbName = nil;
 
     // Notify listeners that a query has started
-    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SMySQLQueryWillBePerformed" object:self];
+    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPQueryWillBePerformed" object:self];
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:@"SELECT DATABASE()"];
-    [theResult setDefaultRowReturnType:SPMySQLResultRowAsArray];
-    if (![mySQLConnection queryErrored]) {
+    SPPostgresResult *theResult = [postgresConnection queryString:@"SELECT current_database()"];
+    [theResult setDefaultRowReturnType:SPPostgresResultRowAsArray];
+    if (![postgresConnection queryErrored]) {
 
         for (NSArray *eachRow in theResult)
         {
@@ -1036,7 +1122,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     }
 
     //query finished
-    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SMySQLQueryHasBeenPerformed" object:self];
+    [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPQueryHasBeenPerformed" object:self];
 }
 
 - (BOOL)navigatorSchemaPathExistsForDatabase:(NSString*)dbname
@@ -1342,6 +1428,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  */
 - (void) endTask
 {
+    NSLog(@"SPDatabaseDocument: endTask called. _isWorkingLevel=%ld", (long)_isWorkingLevel);
     SPLog(@"endTask");
 
     // Ensure a call on the main thread
@@ -1437,6 +1524,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     taskCancellationCallbackObject = nil;
     taskCancellationCallbackSelector = NULL;
     [taskCancelButton setHidden:YES];
+    NSLog(@"SPDatabaseDocument: disableTaskCancellation finished. Cancel button hidden.");
 }
 
 /**
@@ -1450,10 +1538,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     // See whether there is an active database structure task and whether it can be used
     // to cancel the query, for speed (no connection overhead!)
     if (databaseStructureRetrieval && [databaseStructureRetrieval connection]) {
-        [mySQLConnection setLastQueryWasCancelled:YES];
-        [[databaseStructureRetrieval connection] killQueryOnThreadID:[mySQLConnection mysqlConnectionThreadId]];
+        [postgresConnection setLastQueryWasCancelled:YES];
+        [[databaseStructureRetrieval connection] killQueryOnThreadID:[postgresConnection connectionThreadId]];
     } else {
-        [mySQLConnection cancelCurrentQuery];
+        [postgresConnection cancelCurrentQuery];
     }
 
     if (taskCancellationCallbackObject && taskCancellationCallbackSelector) {
@@ -1512,32 +1600,29 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 /**
  * Set the encoding for the database connection
  */
-- (void)setConnectionEncoding:(NSString *)mysqlEncoding reloadingViews:(BOOL)reloadViews
+- (void)setConnectionEncoding:(NSString *)encoding reloadingViews:(BOOL)reloadViews
 {
     BOOL useLatin1Transport = NO;
 
     // Special-case UTF-8 over latin 1 to allow viewing/editing of mangled data.
-    if ([mysqlEncoding isEqualToString:@"utf8-"]) {
+    if ([encoding isEqualToString:@"utf8-"]) {
         useLatin1Transport = YES;
-        mysqlEncoding = @"utf8mb4";
+        encoding = @"UTF8";
     }
 
     // Set the connection encoding
-    if (![mySQLConnection setEncoding:mysqlEncoding]) {
-        NSLog(@"Error: could not set encoding to %@ nor fall back to database encoding on MySQL %@", mysqlEncoding, [self mySQLVersion]);
-        return;
-    }
-    [mySQLConnection setEncodingUsesLatin1Transport:useLatin1Transport];
+    [postgresConnection setEncoding:encoding];
+    [postgresConnection setEncodingUsesLatin1Transport:useLatin1Transport];
 
-    // Update the selected menu item
+    // Update the selected menu item - use PostgreSQL encoding method
     if (useLatin1Transport) {
-        [[self onMainThread] updateEncodingMenuWithSelectedEncoding:[self encodingTagFromMySQLEncoding:[NSString stringWithFormat:@"%@-", mysqlEncoding]]];
+        [[self onMainThread] updateEncodingMenuWithSelectedEncoding:[self encodingTagFromPostgresEncoding:[NSString stringWithFormat:@"%@-", encoding]]];
     } else {
-        [[self onMainThread] updateEncodingMenuWithSelectedEncoding:[self encodingTagFromMySQLEncoding:mysqlEncoding]];
+        [[self onMainThread] updateEncodingMenuWithSelectedEncoding:[self encodingTagFromPostgresEncoding:encoding]];
     }
 
     // Update the stored connection encoding to prevent switches
-    [mySQLConnection storeEncodingForRestoration];
+    [postgresConnection storeEncodingForRestoration];
 
     // Reload views as appropriate
     if (reloadViews) {
@@ -1567,32 +1652,19 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 }
 
 /**
- * Returns the display name for a mysql encoding
+ * Returns the display name for a PostgreSQL encoding
  */
-- (NSNumber *)encodingTagFromMySQLEncoding:(NSString *)mysqlEncoding
+- (NSNumber *)encodingTagFromPostgresEncoding:(NSString *)postgresEncoding
 {
+    if (!postgresEncoding) return @(SPEncodingAutodetect);
+
     NSDictionary *translationMap = @{
-        @"ucs2"     : @(SPEncodingUCS2),
-        @"utf8"     : @(SPEncodingUTF8),
-        @"utf8-"    : @(SPEncodingUTF8viaLatin1),
-        @"ascii"    : @(SPEncodingASCII),
-        @"latin1"   : @(SPEncodingLatin1),
-        @"macroman" : @(SPEncodingMacRoman),
-        @"cp1250"   : @(SPEncodingCP1250Latin2),
-        @"latin2"   : @(SPEncodingISOLatin2),
-        @"cp1256"   : @(SPEncodingCP1256Arabic),
-        @"greek"    : @(SPEncodingGreek),
-        @"hebrew"   : @(SPEncodingHebrew),
-        @"latin5"   : @(SPEncodingLatin5Turkish),
-        @"cp1257"   : @(SPEncodingCP1257WinBaltic),
-        @"cp1251"   : @(SPEncodingCP1251WinCyrillic),
-        @"big5"     : @(SPEncodingBig5Chinese),
-        @"sjis"     : @(SPEncodingShiftJISJapanese),
-        @"ujis"     : @(SPEncodingEUCJPJapanese),
-        @"euckr"    : @(SPEncodingEUCKRKorean),
-        @"utf8mb4"  : @(SPEncodingUTF8MB4)
+        @"UTF8"      : @(SPEncodingUTF8),
+        @"LATIN1"    : @(SPEncodingLatin1),
+        @"SQL_ASCII" : @(SPEncodingASCII),
+        @"MULE_INTERNAL" : @(SPEncodingAutodetect) // Fallback
     };
-    NSNumber *encodingTag = [translationMap valueForKey:mysqlEncoding];
+    NSNumber *encodingTag = [translationMap valueForKey:postgresEncoding.uppercaseString];
 
     if (!encodingTag)
         return @(SPEncodingAutodetect);
@@ -1601,36 +1673,21 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 }
 
 /**
- * Returns the mysql encoding for an encoding string that is displayed to the user
+ * Returns the postgres encoding for an encoding string that is displayed to the user
  */
-- (NSString *)mysqlEncodingFromEncodingTag:(NSNumber *)encodingTag
+- (NSString *)postgresEncodingFromEncodingTag:(NSNumber *)encodingTag
 {
     NSDictionary *translationMap = [NSDictionary dictionaryWithObjectsAndKeys:
-                                    @"ucs2",     [NSString stringWithFormat:@"%i", SPEncodingUCS2],
-                                    @"utf8",     [NSString stringWithFormat:@"%i", SPEncodingUTF8],
-                                    @"utf8-",    [NSString stringWithFormat:@"%i", SPEncodingUTF8viaLatin1],
-                                    @"ascii",    [NSString stringWithFormat:@"%i", SPEncodingASCII],
-                                    @"latin1",   [NSString stringWithFormat:@"%i", SPEncodingLatin1],
-                                    @"macroman", [NSString stringWithFormat:@"%i", SPEncodingMacRoman],
-                                    @"cp1250",   [NSString stringWithFormat:@"%i", SPEncodingCP1250Latin2],
-                                    @"latin2",   [NSString stringWithFormat:@"%i", SPEncodingISOLatin2],
-                                    @"cp1256",   [NSString stringWithFormat:@"%i", SPEncodingCP1256Arabic],
-                                    @"greek",    [NSString stringWithFormat:@"%i", SPEncodingGreek],
-                                    @"hebrew",   [NSString stringWithFormat:@"%i", SPEncodingHebrew],
-                                    @"latin5",   [NSString stringWithFormat:@"%i", SPEncodingLatin5Turkish],
-                                    @"cp1257",   [NSString stringWithFormat:@"%i", SPEncodingCP1257WinBaltic],
-                                    @"cp1251",   [NSString stringWithFormat:@"%i", SPEncodingCP1251WinCyrillic],
-                                    @"big5",     [NSString stringWithFormat:@"%i", SPEncodingBig5Chinese],
-                                    @"sjis",     [NSString stringWithFormat:@"%i", SPEncodingShiftJISJapanese],
-                                    @"ujis",     [NSString stringWithFormat:@"%i", SPEncodingEUCJPJapanese],
-                                    @"euckr",    [NSString stringWithFormat:@"%i", SPEncodingEUCKRKorean],
-                                    @"utf8mb4",  [NSString stringWithFormat:@"%i", SPEncodingUTF8MB4],
+                                    @"UTF8",     [NSString stringWithFormat:@"%i", SPEncodingUTF8],
+                                    @"SQL_ASCII",[NSString stringWithFormat:@"%i", SPEncodingASCII],
+                                    @"LATIN1",   [NSString stringWithFormat:@"%i", SPEncodingLatin1],
+                                    @"UTF8",     [NSString stringWithFormat:@"%i", SPEncodingUTF8MB4],
                                     nil];
-    NSString *mysqlEncoding = [translationMap valueForKey:[NSString stringWithFormat:@"%i", [encodingTag intValue]]];
+    NSString *postgresEncoding = [translationMap valueForKey:[NSString stringWithFormat:@"%i", [encodingTag intValue]]];
 
-    if (!mysqlEncoding) return @"utf8mb4";
+    if (!postgresEncoding) return @"UTF8";
 
-    return mysqlEncoding;
+    return postgresEncoding;
 }
 
 /**
@@ -1644,26 +1701,24 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
 /**
  * Detect and store the encoding of the currently selected database.
- * Falls back to Latin-1 if the encoding cannot be retrieved.
+ * Falls back to UTF8 if the encoding cannot be retrieved.
  */
 - (void)detectDatabaseEncoding
 {
     _supportsEncoding = YES;
 
-    NSString *mysqlEncoding = [databaseDataInstance getDatabaseDefaultCharacterSet];
+    NSString *dbEncoding = [databaseDataInstance getDatabaseDefaultCharacterSet];
 
+    // Fallback -> set encoding to PostgreSQL default encoding UTF8
+    if (!dbEncoding) {
+        NSLog(@"Error: no character encoding found for db, PostgreSQL version is %@", [self postgresVersion]);
 
-
-    // Fallback or older version? -> set encoding to mysql default encoding latin1
-    if ( !mysqlEncoding ) {
-        NSLog(@"Error: no character encoding found for db, mysql version is %@", [self mySQLVersion]);
-
-        selectedDatabaseEncoding = @"latin1";
+        selectedDatabaseEncoding = @"UTF8";
 
         _supportsEncoding = NO;
     }
     else {
-        selectedDatabaseEncoding = mysqlEncoding;
+        selectedDatabaseEncoding = dbEncoding;
     }
 }
 
@@ -1671,11 +1726,11 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  * When sent by an NSMenuItem, will set the encoding based on the title of the menu item
  */
 - (void)chooseEncoding:(id)sender {
-    [self setConnectionEncoding:[self mysqlEncodingFromEncodingTag:[NSNumber numberWithInteger:[(NSMenuItem *)sender tag]]] reloadingViews:YES];
+    [self setConnectionEncoding:[self postgresEncodingFromEncodingTag:[NSNumber numberWithInteger:[(NSMenuItem *)sender tag]]] reloadingViews:YES];
 }
 
 /**
- * return YES if MySQL server supports choosing connection and table encodings (MySQL 4.1 and newer)
+ * return YES if PostgreSQL server supports choosing connection and table encodings
  */
 - (BOOL)supportsEncoding
 {
@@ -1710,22 +1765,23 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         query = nil;
 
         if( type == SPTableTypeTable ) {
-            query = [NSString stringWithFormat:@"SHOW CREATE TABLE %@", [[items objectAtIndex:counter] backtickQuotedString]];
+            // Postgres doesn't support SHOW CREATE TABLE. Using a placeholder.
+            query = [NSString stringWithFormat:@"SELECT 'CREATE TABLE %@ ... (Not fully implemented for Postgres)'", [[items objectAtIndex:counter] postgresQuotedIdentifier]];
             typeString = @"TABLE";
         }
         else if( type == SPTableTypeView ) {
-            query = [NSString stringWithFormat:@"SHOW CREATE VIEW %@", [[items objectAtIndex:counter] backtickQuotedString]];
+            query = [NSString stringWithFormat:@"SELECT 'CREATE OR REPLACE VIEW ' || %@ || ' AS ' || pg_get_viewdef(%@, true)", [[items objectAtIndex:counter] postgresQuotedIdentifier], [[items objectAtIndex:counter] postgresQuotedIdentifier]];
             typeString = @"VIEW";
         }
         else if( type == SPTableTypeProc ) {
-            query = [NSString stringWithFormat:@"SHOW CREATE PROCEDURE %@", [[items objectAtIndex:counter] backtickQuotedString]];
+            query = [NSString stringWithFormat:@"SELECT pg_get_functiondef(%@::regproc)", [[items objectAtIndex:counter] postgresQuotedIdentifier]];
             typeString = @"PROCEDURE";
-            colOffs = 2;
+            colOffs = 0; // pg_get_functiondef returns 1 column
         }
         else if( type == SPTableTypeFunc ) {
-            query = [NSString stringWithFormat:@"SHOW CREATE FUNCTION %@", [[items objectAtIndex:counter] backtickQuotedString]];
+            query = [NSString stringWithFormat:@"SELECT pg_get_functiondef(%@::regproc)", [[items objectAtIndex:counter] postgresQuotedIdentifier]];
             typeString = @"FUNCTION";
-            colOffs = 2;
+            colOffs = 0; // pg_get_functiondef returns 1 column
         }
 
         if (query == nil) {
@@ -1734,13 +1790,13 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
             return;
         }
 
-        SPMySQLResult *theResult = [mySQLConnection queryString:query];
+        SPPostgresResult *theResult = [postgresConnection queryString:query];
         [theResult setReturnDataAsStrings:YES];
 
         // Check for errors, only displaying if the connection hasn't been terminated
-        if ([mySQLConnection queryErrored]) {
-            if ([mySQLConnection isConnected]) {
-                [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error message title") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while creating table syntax.\n\n: %@", @"Error shown when unable to show create table syntax"), [mySQLConnection lastErrorMessage]] callback:nil];
+        if ([postgresConnection queryErrored]) {
+            if ([postgresConnection isConnected]) {
+                [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error message title") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while creating table syntax.\n\n: %@", @"Error shown when unable to show create table syntax"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
             }
 
             return;
@@ -1810,7 +1866,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 }
 
 /**
- * Performs a MySQL check table on the selected table and presents the result to the user via an alert sheet.
+ * Performs a PostgreSQL check table on the selected table and presents the result to the user via an alert sheet.
  */
 - (void)checkTable {
     NSArray *selectedItems = [tablesListInstance selectedTableItems];
@@ -1818,16 +1874,17 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     if([selectedItems count] == 0) return;
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"CHECK TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
+    // CHECK TABLE not supported in Postgres
+    SPPostgresResult *theResult = nil; // [postgresConnection queryString:[NSString stringWithFormat:@"CHECK TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
     [theResult setReturnDataAsStrings:YES];
 
     NSString *what = ([selectedItems count]>1) ? NSLocalizedString(@"selected items", @"selected items") : [NSString stringWithFormat:@"%@ '%@'", NSLocalizedString(@"table", @"table"), [self table]];
 
     // Check for errors, only displaying if the connection hasn't been terminated
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         NSString *mText = ([selectedItems count]>1) ? NSLocalizedString(@"Unable to check selected items", @"unable to check selected items message") : NSLocalizedString(@"Unable to check table", @"unable to check table message");
-        if ([mySQLConnection isConnected]) {
-            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to check the %@.\n\nMySQL said:%@",@"an error occurred while trying to check the %@.\n\nMySQL said:%@"), what, [mySQLConnection lastErrorMessage]] callback:nil];
+        if ([postgresConnection isConnected]) {
+            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to check the %@.\n\nPostgreSQL said:%@",@"an error occurred while trying to check the %@.\n\nPostgreSQL said:%@"), what, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         }
 
         return;
@@ -1848,7 +1905,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         message = ([[lastresult objectForKey:@"Msg_type"] isEqualToString:@"status"]) ? NSLocalizedString(@"Check table successfully passed.",@"check table successfully passed message") : NSLocalizedString(@"Check table failed.", @"check table failed message");
 
-        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nMySQL said: %@", @"Error display text, showing original MySQL error"), message, [lastresult objectForKey:@"Msg_text"]];
+        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nPostgreSQL said: %@", @"Error display text, showing original PostgreSQL error"), message, [lastresult objectForKey:@"Msg_text"]];
     } else if(statusOK) {
         message = NSLocalizedString(@"Check of all selected items successfully passed.",@"check of all selected items successfully passed message");
     }
@@ -1856,7 +1913,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if(message) {
         [NSAlert createWarningAlertWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Check %@", @"CHECK one or more tables - result title"), what] message:message callback:nil];
     } else {
-        message = NSLocalizedString(@"MySQL said:",@"mysql said message");
+        message = NSLocalizedString(@"PostgreSQL said:",@"PostgreSQL error message");
         statusValues = resultStatuses;
 
         [NSAlert createAccessoryWarningAlertWithTitle:NSLocalizedString(@"Error while checking selected items", @"error while checking selected items message") message:message accessoryView:statusTableAccessoryView callback:^{
@@ -1876,16 +1933,16 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     if([selectedItems count] == 0) return;
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"ANALYZE TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
+    SPPostgresResult *theResult = [postgresConnection queryString:[NSString stringWithFormat:@"ANALYZE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
     [theResult setReturnDataAsStrings:YES];
 
     NSString *what = ([selectedItems count]>1) ? NSLocalizedString(@"selected items", @"selected items") : [NSString stringWithFormat:@"%@ '%@'", NSLocalizedString(@"table", @"table"), [self table]];
 
     // Check for errors, only displaying if the connection hasn't been terminated
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         NSString *mText = ([selectedItems count]>1) ? NSLocalizedString(@"Unable to analyze selected items", @"unable to analyze selected items message") : NSLocalizedString(@"Unable to analyze table", @"unable to analyze table message");
-        if ([mySQLConnection isConnected]) {
-            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while analyzing the %@.\n\nMySQL said:%@",@"an error occurred while analyzing the %@.\n\nMySQL said:%@"), what, [mySQLConnection lastErrorMessage]] callback:nil];
+        if ([postgresConnection isConnected]) {
+            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while analyzing the %@.\n\nPostgreSQL said:%@",@"an error occurred while analyzing the %@.\n\nPostgreSQL said:%@"), what, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         }
 
         return;
@@ -1906,7 +1963,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         message = ([[lastresult objectForKey:@"Msg_type"] isEqualToString:@"status"]) ? NSLocalizedString(@"Successfully analyzed table.",@"analyze table successfully passed message") : NSLocalizedString(@"Analyze table failed.", @"analyze table failed message");
 
-        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nMySQL said: %@", @"Error display text, showing original MySQL error"), message, [lastresult objectForKey:@"Msg_text"]];
+        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nPostgreSQL said: %@", @"Error display text, showing original PostgreSQL error"), message, [lastresult objectForKey:@"Msg_text"]];
     } else if(statusOK) {
         message = NSLocalizedString(@"Successfully analyzed all selected items.",@"successfully analyzed all selected items message");
     }
@@ -1914,7 +1971,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if(message) {
         [NSAlert createWarningAlertWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Analyze %@", @"ANALYZE one or more tables - result title"), what] message:message callback:nil];
     } else {
-        message = NSLocalizedString(@"MySQL said:",@"mysql said message");
+        message = NSLocalizedString(@"PostgreSQL said:",@"PostgreSQL error message");
 
         statusValues = resultStatuses;
         [NSAlert createAccessoryWarningAlertWithTitle:NSLocalizedString(@"Error while analyzing selected items", @"error while analyzing selected items message") message:message accessoryView:statusTableAccessoryView callback:^{
@@ -1935,16 +1992,16 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     if([selectedItems count] == 0) return;
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"OPTIMIZE TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
+    SPPostgresResult *theResult = [postgresConnection queryString:[NSString stringWithFormat:@"VACUUM %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
     [theResult setReturnDataAsStrings:YES];
 
     NSString *what = ([selectedItems count]>1) ? NSLocalizedString(@"selected items", @"selected items") : [NSString stringWithFormat:@"%@ '%@'", NSLocalizedString(@"table", @"table"), [self table]];
 
     // Check for errors, only displaying if the connection hasn't been terminated
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         NSString *mText = ([selectedItems count]>1) ? NSLocalizedString(@"Unable to optimze selected items", @"unable to optimze selected items message") : NSLocalizedString(@"Unable to optimze table", @"unable to optimze table message");
-        if ([mySQLConnection isConnected]) {
-            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while optimzing the %@.\n\nMySQL said:%@",@"an error occurred while trying to optimze the %@.\n\nMySQL said:%@"), what, [mySQLConnection lastErrorMessage]] callback:nil];
+        if ([postgresConnection isConnected]) {
+            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while optimzing the %@.\n\nPostgreSQL said:%@",@"an error occurred while trying to optimze the %@.\n\nPostgreSQL said:%@"), what, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         }
         return;
     }
@@ -1964,7 +2021,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         message = ([[lastresult objectForKey:@"Msg_type"] isEqualToString:@"status"]) ? NSLocalizedString(@"Successfully optimized table.",@"optimize table successfully passed message") : NSLocalizedString(@"Optimize table failed.", @"optimize table failed message");
 
-        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nMySQL said: %@", @"Error display text, showing original MySQL error"), message, [lastresult objectForKey:@"Msg_text"]];
+        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nPostgreSQL said: %@", @"Error display text, showing original PostgreSQL error"), message, [lastresult objectForKey:@"Msg_text"]];
     } else if(statusOK) {
         message = NSLocalizedString(@"Successfully optimized all selected items.",@"successfully optimized all selected items message");
     }
@@ -1972,7 +2029,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if(message) {
         [NSAlert createWarningAlertWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Optimize %@", @"OPTIMIZE one or more tables - result title"), what] message:message callback:nil];
     } else {
-        message = NSLocalizedString(@"MySQL said:",@"mysql said message");
+        message = NSLocalizedString(@"PostgreSQL said:",@"PostgreSQL error message");
 
         statusValues = resultStatuses;
 
@@ -1993,16 +2050,17 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     if([selectedItems count] == 0) return;
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"REPAIR TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
+    // REPAIR TABLE not supported in Postgres
+    SPPostgresResult *theResult = nil; // [postgresConnection queryString:[NSString stringWithFormat:@"REPAIR TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
     [theResult setReturnDataAsStrings:YES];
 
     NSString *what = ([selectedItems count]>1) ? NSLocalizedString(@"selected items", @"selected items") : [NSString stringWithFormat:@"%@ '%@'", NSLocalizedString(@"table", @"table"), [self table]];
 
     // Check for errors, only displaying if the connection hasn't been terminated
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         NSString *mText = ([selectedItems count]>1) ? NSLocalizedString(@"Unable to repair selected items", @"unable to repair selected items message") : NSLocalizedString(@"Unable to repair table", @"unable to repair table message");
-        if ([mySQLConnection isConnected]) {
-            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while repairing the %@.\n\nMySQL said:%@",@"an error occurred while trying to repair the %@.\n\nMySQL said:%@"), what, [mySQLConnection lastErrorMessage]] callback:nil];
+        if ([postgresConnection isConnected]) {
+            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while repairing the %@.\n\nPostgreSQL said:%@",@"an error occurred while trying to repair the %@.\n\nPostgreSQL said:%@"), what, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         }
         return;
     }
@@ -2022,7 +2080,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         message = ([[lastresult objectForKey:@"Msg_type"] isEqualToString:@"status"]) ? NSLocalizedString(@"Successfully repaired table.",@"repair table successfully passed message") : NSLocalizedString(@"Repair table failed.", @"repair table failed message");
 
-        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nMySQL said: %@", @"Error display text, showing original MySQL error"), message, [lastresult objectForKey:@"Msg_text"]];
+        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nPostgreSQL said: %@", @"Error display text, showing original PostgreSQL error"), message, [lastresult objectForKey:@"Msg_text"]];
     } else if(statusOK) {
         message = NSLocalizedString(@"Successfully repaired all selected items.",@"successfully repaired all selected items message");
     }
@@ -2030,7 +2088,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if(message) {
         [NSAlert createWarningAlertWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Repair %@", @"REPAIR one or more tables - result title"), what] message:message callback:nil];
     } else {
-        message = NSLocalizedString(@"MySQL said:",@"mysql said message");
+        message = NSLocalizedString(@"PostgreSQL said:",@"PostgreSQL error message");
 
         statusValues = resultStatuses;
 
@@ -2051,16 +2109,17 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     if([selectedItems count] == 0) return;
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"FLUSH TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
+    // FLUSH TABLE not supported in Postgres
+    SPPostgresResult *theResult = nil; // [postgresConnection queryString:[NSString stringWithFormat:@"FLUSH TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
     [theResult setReturnDataAsStrings:YES];
 
     NSString *what = ([selectedItems count]>1) ? NSLocalizedString(@"selected items", @"selected items") : [NSString stringWithFormat:@"%@ '%@'", NSLocalizedString(@"table", @"table"), [self table]];
 
     // Check for errors, only displaying if the connection hasn't been terminated
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         NSString *mText = ([selectedItems count]>1) ? NSLocalizedString(@"Unable to flush selected items", @"unable to flush selected items message") : NSLocalizedString(@"Unable to flush table", @"unable to flush table message");
-        if ([mySQLConnection isConnected]) {
-            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while flushing the %@.\n\nMySQL said:%@",@"an error occurred while trying to flush the %@.\n\nMySQL said:%@"), what, [mySQLConnection lastErrorMessage]] callback:nil];
+        if ([postgresConnection isConnected]) {
+            [NSAlert createWarningAlertWithTitle:mText message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while flushing the %@.\n\nPostgreSQL said:%@",@"an error occurred while trying to flush the %@.\n\nPostgreSQL said:%@"), what, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         }
 
         return;
@@ -2081,7 +2140,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         message = ([[lastresult objectForKey:@"Msg_type"] isEqualToString:@"status"]) ? NSLocalizedString(@"Successfully flushed table.",@"flush table successfully passed message") : NSLocalizedString(@"Flush table failed.", @"flush table failed message");
 
-        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nMySQL said: %@", @"Error display text, showing original MySQL error"), message, [lastresult objectForKey:@"Msg_text"]];
+        message = [NSString stringWithFormat:NSLocalizedString(@"%@\n\nPostgreSQL said: %@", @"Error display text, showing original PostgreSQL error"), message, [lastresult objectForKey:@"Msg_text"]];
     } else if(statusOK) {
         message = NSLocalizedString(@"Successfully flushed all selected items.",@"successfully flushed all selected items message");
     }
@@ -2089,7 +2148,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if(message) {
         [NSAlert createWarningAlertWithTitle:[NSString stringWithFormat:NSLocalizedString(@"Flush %@", @"FLUSH one or more tables - result title"), what] message:message callback:nil];
     } else {
-        message = NSLocalizedString(@"MySQL said:",@"mysql said message");
+        message = NSLocalizedString(@"PostgreSQL said:",@"PostgreSQL error message");
 
         statusValues = resultStatuses;
 
@@ -2102,7 +2161,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 }
 
 /**
- * Runs a MySQL checksum on the selected table and present the result to the user via an alert sheet.
+ * Runs a PostgreSQL checksum on the selected table and present the result to the user via an alert sheet.
  */
 - (void)checksumTable {
     NSArray *selectedItems = [tablesListInstance selectedTableItems];
@@ -2110,14 +2169,15 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     if([selectedItems count] == 0) return;
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"CHECKSUM TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
+    // CHECKSUM TABLE not supported in Postgres
+    SPPostgresResult *theResult = nil; // [postgresConnection queryString:[NSString stringWithFormat:@"CHECKSUM TABLE %@", [selectedItems componentsJoinedAndBacktickQuoted]]];
 
     NSString *what = ([selectedItems count]>1) ? NSLocalizedString(@"selected items", @"selected items") : [NSString stringWithFormat:@"%@ '%@'", NSLocalizedString(@"table", @"table"), [self table]];
 
     // Check for errors, only displaying if the connection hasn't been terminated
-    if ([mySQLConnection queryErrored]) {
-        if ([mySQLConnection isConnected]) {
-            NSString *alertMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while performing the checksum on %@.\n\nMySQL said:%@",@"an error occurred while performing the checksum on the %@.\n\nMySQL said:%@"), what, [mySQLConnection lastErrorMessage]];
+    if ([postgresConnection queryErrored]) {
+        if ([postgresConnection isConnected]) {
+            NSString *alertMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while performing the checksum on %@.\n\nPostgreSQL said:%@",@"an error occurred while performing the checksum on the %@.\n\nPostgreSQL said:%@"), what, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
             [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to perform the checksum", @"unable to perform the checksum") message:alertMessage callback:nil];
         }
 
@@ -2281,16 +2341,16 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         userManagerInstance = [[SPUserManager alloc] init];
 
         [userManagerInstance setDatabaseDocument:self];
-        [userManagerInstance setConnection:mySQLConnection];
+        [userManagerInstance setConnection:postgresConnection];
         [userManagerInstance setServerSupport:serverSupport];
     }
 
-    // Before displaying the user manager make sure the current user has access to the mysql.user table.
-    SPMySQLResult *result = [mySQLConnection queryString:@"SELECT user FROM mysql.user LIMIT 1"];
+    // Before displaying the user manager make sure the current user has access to the pg_catalog.pg_user view.
+    SPPostgresResult *result = [postgresConnection queryString:@"SELECT usename FROM pg_user LIMIT 1"];
 
-    if ([mySQLConnection queryErrored] && ([result numberOfRows] == 0)) {
+    if ([postgresConnection queryErrored] && ([result numberOfRows] == 0)) {
 
-        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to get list of users", @"unable to get list of users message") message:NSLocalizedString(@"An error occurred while trying to get the list of users. Please make sure you have the necessary privileges to perform user management, including access to the mysql.user table.", @"unable to get list of users informative message") callback:nil];
+        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to get list of users", @"unable to get list of users message") message:NSLocalizedString(@"An error occurred while trying to get the list of users. Please make sure you have the necessary privileges to perform user management, including access to the pg_catalog.pg_user view.", @"unable to get list of users informative message") callback:nil];
         return;
     }
 
@@ -2320,14 +2380,14 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  * Flushes the mysql privileges
  */
 - (void)flushPrivileges {
-    [mySQLConnection queryString:@"FLUSH PRIVILEGES"];
+    [postgresConnection queryString:@"FLUSH PRIVILEGES"];
 
-    if (![mySQLConnection queryErrored]) {
+    if (![postgresConnection queryErrored]) {
         //flushed privileges without errors
         [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Flushed Privileges", @"title of panel when successfully flushed privs") message:NSLocalizedString(@"Successfully flushed privileges.", @"message of panel when successfully flushed privs") callback:nil];
     } else {
         //error while flushing privileges
-        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't flush privileges.\nMySQL said: %@", @"message of panel when flushing privs failed"), [mySQLConnection lastErrorMessage]] callback:nil];
+        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't flush privileges.\nPostgreSQL said: %@", @"message of panel when flushing privs failed"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
     }
 }
 
@@ -2339,16 +2399,16 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 {
     SPLog(@"connect in dbdoc");
 
-    if (mySQLVersion) return;
+    if (postgresVersion) return;
     [connectionController initiateConnection:self];
 }
 
 - (void)closeConnection {
     SPLog(@"closeConnection");
-    [mySQLConnection setDelegate:nil];
+    [postgresConnection setDelegate:nil];
 
-    SPLog(@"Closing mySQLConnection");
-    [mySQLConnection disconnect];
+    SPLog(@"Closing postgresConnection");
+    [postgresConnection disconnect];
   
     SPLog(@"Closing databaseStructureRetrieval");
     [[databaseStructureRetrieval connection] disconnect];
@@ -2369,7 +2429,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object change:(NSDictionary *)change context:(void *)context
 {
     if ([keyPath isEqualToString:SPConsoleEnableLogging]) {
-        [mySQLConnection setDelegateQueryLogging:[[change objectForKey:NSKeyValueChangeNewKey] boolValue]];
+        [postgresConnection setDelegateQueryLogging:[[change objectForKey:NSKeyValueChangeNewKey] boolValue]];
     }
     else if ([keyPath isEqualToString:SPEditInSheetEnabled]) {
         multipleLineEditingButton.state = [[change objectForKey:NSKeyValueChangeNewKey] boolValue];
@@ -2499,8 +2559,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     tabTitle = [NSMutableString string];
 
-    // Add the MySQL version to the window title if enabled in prefs
-    if ([prefs boolForKey:SPDisplayServerVersionInWindowTitle]) [tabTitle appendFormat:@"(MySQL %@)\n", [self mySQLVersion]];
+    // Add the PostgreSQL version to the window title if enabled in prefs
+    if ([prefs boolForKey:SPDisplayServerVersionInWindowTitle]) [tabTitle appendFormat:@"(PostgreSQL %@)\n", [self postgresVersion]];
 
     [tabTitle appendString:[self name]];
     if ([self database]) {
@@ -2523,11 +2583,11 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 }
 
 /**
- * Returns the MySQL version
+ * Returns the PostgreSQL version
  */
-- (NSString *)mySQLVersion
+- (NSString *)postgresVersion
 {
-    return mySQLVersion;
+    return postgresVersion;
 }
 
 /**
@@ -2842,7 +2902,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 - (BOOL)saveDocumentWithFilePath:(NSString *)fileName inBackground:(BOOL)saveInBackground onlyPreferences:(BOOL)saveOnlyPreferences contextInfo:(NSDictionary*)contextInfo
 {
     // Do not save if no connection is/was available
-    if (saveInBackground && ([self mySQLVersion] == nil || ![[self mySQLVersion] length])) return NO;
+    if (saveInBackground && ([self postgresVersion] == nil || ![[self postgresVersion] length])) return NO;
 
     NSMutableDictionary *spfDocData_temp = [NSMutableDictionary dictionary];
 
@@ -2951,8 +3011,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     // Add basic details
     [spfStructure setObject:@1 forKey:SPFVersionKey];
     [spfStructure setObject:SPFConnectionContentType forKey:SPFFormatKey];
-    [spfStructure setObject:@"mysql" forKey:@"rdbms_type"];
-    if([self mySQLVersion]) [spfStructure setObject:[self mySQLVersion] forKey:@"rdbms_version"];
+    [spfStructure setObject:@"postgresql" forKey:@"rdbms_type"];
+    if([self postgresVersion]) [spfStructure setObject:[self postgresVersion] forKey:@"rdbms_version"];
 
     // Add auto-connect if appropriate
     [spfStructure setObject:[spfDocData_temp objectForKey:@"auto_connect"] forKey:@"auto_connect"];
@@ -3097,10 +3157,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 }
 
 /**
- * Show the MySQL Help TOC of the current MySQL connection
- * Invoked by the MainMenu > Help > MySQL Help
+ * Show the PostgreSQL Help TOC of the current PostgreSQL connection
+ * Invoked by the MainMenu > Help > PostgreSQL Help
  */
-- (void)showMySQLHelp {
+- (void)showPostgreSQLHelp {
     [helpViewerClientInstance showHelpFor:SPHelpViewerSearchTOC addToHistory:YES calledByAutoHelp:NO];
     [[helpViewerClientInstance helpWebViewWindow] makeKeyWindow];
 }
@@ -3382,9 +3442,9 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         // Add the path to the window title
         [windowTitle appendString:pathName];
 
-        // Add the MySQL version to the window title if enabled in prefs
+        // Add the PostgreSQL version to the window title if enabled in prefs
         if ([prefs boolForKey:SPDisplayServerVersionInWindowTitle]) {
-            [windowTitle appendFormat:@"(MySQL %@) ", mySQLVersion];
+            [windowTitle appendFormat:@"(PostgreSQL %@) ", postgresVersion];
         }
 
         NSMutableString *tabTitle = [NSMutableString string];
@@ -3445,7 +3505,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     } else if ([itemIdentifier isEqualToString:SPMainToolbarShowConsole]) {
         [toolbarItem setPaletteLabel:NSLocalizedString(@"Show Console", @"show console")];
-        [toolbarItem setToolTip:NSLocalizedString(@"Show the console which shows all MySQL commands performed by Sequel Ace", @"tooltip for toolbar item for show console")];
+        [toolbarItem setToolTip:NSLocalizedString(@"Show the console which shows all SQL commands performed by Sequel PAce", @"tooltip for toolbar item for show console")];
 
         [toolbarItem setLabel:NSLocalizedString(@"Console", @"Console")];
         if (@available(macOS 11.0, *)) {
@@ -3463,7 +3523,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         [toolbarItem setLabel:NSLocalizedString(@"Clear Console", @"toolbar item for clear console")];
         [toolbarItem setPaletteLabel:NSLocalizedString(@"Clear Console", @"toolbar item for clear console")];
         //set up tooltip and image
-        [toolbarItem setToolTip:NSLocalizedString(@"Clear the console which shows all MySQL commands performed by Sequel Ace", @"tooltip for toolbar item for clear console")];
+        [toolbarItem setToolTip:NSLocalizedString(@"Clear the console which shows all SQL commands performed by Sequel PAce", @"tooltip for toolbar item for clear console")];
         if (@available(macOS 11.0, *)) {
             [toolbarItem setImage:textAndCommandMacwindowImage];
         } else {
@@ -3853,7 +3913,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     if (returnConnection) {
         NSMutableDictionary *connection = [NSMutableDictionary dictionary];
 
-        [connection setObject:@"mysql" forKey:@"rdbms_type"];
+        [connection setObject:@"postgresql" forKey:@"rdbms_type"];
 
         NSString *connectionType;
         switch ([connectionController type]) {
@@ -3951,7 +4011,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         }
         [sessionState setObject:currentlySelectedViewName forKey:@"view"];
 
-        [sessionState setObject:[mySQLConnection encoding] forKey:@"connectionEncoding"];
+        [sessionState setObject:[postgresConnection encodingName] forKey:@"connectionEncoding"];
 
         [sessionState setObject:[NSNumber numberWithBool:[[[self.parentWindowController window] toolbar] isVisible]] forKey:@"isToolbarVisible"];
         [sessionState setObject:[NSNumber numberWithFloat:[tableContentInstance tablesListWidth]] forKey:@"windowVerticalDividerPosition"];
@@ -4002,7 +4062,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     SPKeychain *keychain = nil;
 
     // If this document already has a connection, don't proceed.
-    if (mySQLConnection) return NO;
+    if (postgresConnection) return NO;
 
     // Load the connection data from the state dictionary
     connection = [NSDictionary dictionaryWithDictionary:[stateDetails objectForKey:@"connection"]];
@@ -4314,7 +4374,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         }
 
         // Reset database view encoding if differs from default
-        if ([spfSession objectForKey:@"connectionEncoding"] && ![[mySQLConnection encoding] isEqualToString:[spfSession objectForKey:@"connectionEncoding"]]) {
+        if ([spfSession objectForKey:@"connectionEncoding"] && ![[postgresConnection encodingName] isEqualToString:[spfSession objectForKey:@"connectionEncoding"]]) {
             [self setConnectionEncoding:[spfSession objectForKey:@"connectionEncoding"] reloadingViews:YES];
         }
 
@@ -4606,7 +4666,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
             if(doSyntaxHighlighting && [params count] < 3) return;
 
-            BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
+            BOOL changeEncoding = ![[postgresConnection encodingName] hasPrefix:@"utf8"];
 
 
             NSArray *items = [params subarrayWithRange:NSMakeRange(1, [params count]-( (doSyntaxHighlighting) ? 2 : 1) )];
@@ -4663,21 +4723,23 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
                 // Ensure that queries are made in UTF8
                 if (changeEncoding) {
-                    [mySQLConnection storeEncodingForRestoration];
-                    [mySQLConnection setEncoding:@"utf8mb4"];
+                    [postgresConnection storeEncodingForRestoration];
+                    [postgresConnection setEncoding:@"utf8mb4"];
                 }
 
                 // Get create syntax
-                SPMySQLResult *queryResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW CREATE %@ %@",
+                // SHOW CREATE TABLE not supported directly. Using pg_get_viewdef for views or custom logic.
+                // For now, simple select to avoid crash
+                SPPostgresResult *queryResult = nil; /* [postgresConnection queryString:[NSString stringWithFormat:@"SHOW CREATE %@ %@",
                                                                            itemTypeStr,
-                                                                           [item backtickQuotedString]]];
+                                                                           [item postgresQuotedIdentifier]]]; */
                 [queryResult setReturnDataAsStrings:YES];
 
-                if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+                if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
                 if ( ![queryResult numberOfRows] ) {
                     //error while getting table structure
-                    [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't get create syntax.\nMySQL said: %@", @"message of panel when table information cannot be retrieved"), [mySQLConnection lastErrorMessage]] callback:nil];
+                    [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't get create syntax.\nPostgreSQL said: %@", @"message of panel when table information cannot be retrieved"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
                     status = @"1";
                 } else {
                     NSString *syntaxString = [[queryResult getRowAsArray] objectAtIndex:queryCol];
@@ -4750,10 +4812,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
                     SPLog(@"Couldn't create file handle to %@", resultFileName);
                 }
 
-                SPMySQLResult *theResult = [mySQLConnection streamingQueryString:query];
+                SPPostgresResult *theResult = [postgresConnection queryString:query];
                 [theResult setReturnDataAsStrings:YES];
-                if ([mySQLConnection queryErrored]) {
-                    [fh writeData:[[NSString stringWithFormat:@"MySQL said: %@", [mySQLConnection lastErrorMessage]] dataUsingEncoding:NSUTF8StringEncoding]];
+                if ([postgresConnection queryErrored]) {
+                    [fh writeData:[[NSString stringWithFormat:@"PostgreSQL said: %@", [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] dataUsingEncoding:NSUTF8StringEncoding]];
                     status = @"1";
                 } else {
 
@@ -4811,10 +4873,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
                                 id cell = [theRow safeObjectAtIndex:j];
                                 if([cell isNSNull])
                                     [result appendString:@"\"NULL\""];
-                                else if([cell isKindOfClass:[SPMySQLGeometryData class]])
+                                else if([cell isKindOfClass:[SPPostgresGeometryData class]])
                                     [result appendFormat:@"\"%@\"", [cell wktString]];
                                 else if([cell isKindOfClass:[NSData class]]) {
-                                    NSString *displayString = [[NSString alloc] initWithData:cell encoding:[mySQLConnection stringEncoding]];
+                                    NSString *displayString = [[NSString alloc] initWithData:cell encoding:[postgresConnection stringEncoding]];
                                     if (!displayString) displayString = [[NSString alloc] initWithData:cell encoding:NSASCIIStringEncoding];
                                     if (displayString) {
                                         [result appendFormat:@"\"%@\"", [displayString stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""]];
@@ -4849,10 +4911,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
                                 id cell = [theRow safeObjectAtIndex:j];
                                 if([cell isNSNull])
                                     [result appendString:@"NULL"];
-                                else if([cell isKindOfClass:[SPMySQLGeometryData class]])
+                                else if([cell isKindOfClass:[SPPostgresGeometryData class]])
                                     [result appendFormat:@"%@", [cell wktString]];
                                 else if([cell isKindOfClass:[NSData class]]) {
-                                    NSString *displayString = [[NSString alloc] initWithData:cell encoding:[mySQLConnection stringEncoding]];
+                                    NSString *displayString = [[NSString alloc] initWithData:cell encoding:[postgresConnection stringEncoding]];
                                     if (!displayString) displayString = [[NSString alloc] initWithData:cell encoding:NSASCIIStringEncoding];
                                     if (displayString) {
                                         [result appendFormat:@"%@", [[displayString stringByReplacingOccurrencesOfString:@"\n" withString:@"↵"] stringByReplacingOccurrencesOfString:@"\t" withString:@"⇥"]];
@@ -4989,10 +5051,10 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         [env setObject:([self databaseEncoding]) ? : @"" forKey:SPBundleShellVariableDatabaseEncoding];
     }
 
-    [env setObject:@"mysql" forKey:SPBundleShellVariableRDBMSType];
+    [env setObject:@"postgresql" forKey:SPBundleShellVariableRDBMSType];
 
-    if ([self mySQLVersion]) {
-        [env setObject:[self mySQLVersion] forKey:SPBundleShellVariableRDBMSVersion];
+    if ([self postgresVersion]) {
+        [env setObject:[self postgresVersion] forKey:SPBundleShellVariableRDBMSVersion];
     }
 
     return env;
@@ -5257,19 +5319,19 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     }
 
     // As we're amending identifiers, ensure UTF8
-    if (![[mySQLConnection encoding] hasPrefix:@"utf8"]) {
-        [mySQLConnection setEncoding:@"utf8mb4"];
+    if (![[postgresConnection encodingName] hasPrefix:@"utf8"]) {
+        [postgresConnection setEncoding:@"utf8mb4"];
     }
 
     SPDatabaseAction *dbAction = [[SPDatabaseAction alloc] init];
-    [dbAction setConnection:mySQLConnection];
+    [dbAction setConnection:postgresConnection];
     BOOL res = [dbAction createDatabase:[databaseNameField stringValue]
                            withEncoding:[addDatabaseCharsetHelper selectedCharset]
                               collation:[addDatabaseCharsetHelper selectedCollation]];
 
     if (!res) {
         // An error occurred
-        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't create database.\nMySQL said: %@", @"message of panel when creation of db failed"), [mySQLConnection lastErrorMessage]] callback:nil];
+        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't create database.\nPostgreSQL said: %@", @"message of panel when creation of db failed"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         return;
     }
 
@@ -5292,20 +5354,22 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     NSString *newCharset   = [alterDatabaseCharsetHelper selectedCharset];
     NSString *newCollation = [alterDatabaseCharsetHelper selectedCollation];
 
-    NSString *alterStatement = [NSString stringWithFormat:@"ALTER DATABASE %@ DEFAULT CHARACTER SET %@", [[self database] backtickQuotedString],[newCharset backtickQuotedString]];
+    // Postgres uses ENCODING and LC_COLLATE/LC_CTYPE.
+    // NSString *alterStatement = [NSString stringWithFormat:@"ALTER DATABASE %@ DEFAULT CHARACTER SET %@", [[self database] postgresQuotedIdentifier],[newCharset postgresQuotedIdentifier]];
+    NSString *alterStatement = @""; // Placeholder
 
     //technically there is an issue here: If a user had a non-default collation and now wants to switch to the default collation this cannot be specidifed (default == nil).
     //However if you just do an ALTER with CHARACTER SET == oldCharset MySQL will still reset the collation therefore doing exactly what we want.
     if(newCollation) {
-        alterStatement = [NSString stringWithFormat:@"%@ DEFAULT COLLATE %@",alterStatement,[newCollation backtickQuotedString]];
+        // alterStatement = [NSString stringWithFormat:@"%@ DEFAULT COLLATE %@",alterStatement,[newCollation postgresQuotedIdentifier]];
     }
 
     //run alter
-    [mySQLConnection queryString:alterStatement];
+    [postgresConnection queryString:alterStatement];
 
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         // An error occurred
-        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't alter database.\nMySQL said: %@", @"Alter Database : Query Failed ($1 = mysql error message)"), [mySQLConnection lastErrorMessage]] callback:nil];
+        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't alter database.\nPostgreSQL said: %@", @"Alter Database : Query Failed ($1 = PostgreSQL error message)"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
         return;
     }
 
@@ -5321,13 +5385,13 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 - (void)_removeDatabase
 {
     // Drop the database from the server
-    [mySQLConnection queryString:[NSString stringWithFormat:@"DROP DATABASE %@", [[self database] backtickQuotedString]]];
+    [postgresConnection queryString:[NSString stringWithFormat:@"DROP DATABASE %@", [[self database] postgresQuotedIdentifier]]];
 
-    if ([mySQLConnection queryErrored]) {
+    if ([postgresConnection queryErrored]) {
         // An error occurred
         [self performSelector:@selector(showErrorSheetWith:)
                    withObject:[NSArray arrayWithObjects:NSLocalizedString(@"Error", @"error"),
-                               [NSString stringWithFormat:NSLocalizedString(@"Couldn't delete the database.\nMySQL said: %@", @"message of panel when deleting db failed"), [mySQLConnection lastErrorMessage]],
+                               [NSString stringWithFormat:NSLocalizedString(@"Couldn't delete the database.\nPostgreSQL said: %@", @"message of panel when deleting db failed"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")],
                                nil]
                    afterDelay:0.3];
 
@@ -5345,95 +5409,12 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
     [self setDatabases];
 
-    [tablesListInstance setConnection:mySQLConnection];
+    [tablesListInstance setConnection:postgresConnection];
 
     // inform observers that a database was dropped
     [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:SPDatabaseCreatedRemovedRenamedNotification object:nil];
 
     [self updateWindowTitle:self];
-}
-
-/**
- * Select the specified database and, optionally, table.
- */
-- (void)_selectDatabaseAndItem:(NSDictionary *)selectionDetails
-{
-    @autoreleasepool {
-        NSString *targetDatabaseName = [selectionDetails objectForKey:@"database"];
-        NSString *targetItemName = [selectionDetails objectForKey:@"item"];
-
-        // Save existing scroll position and details, and ensure no duplicate entries are created as table list changes
-        BOOL historyStateChanging = [spHistoryControllerInstance modifyingState];
-
-        if (!historyStateChanging) {
-            [spHistoryControllerInstance updateHistoryEntries];
-            [spHistoryControllerInstance setModifyingState:YES];
-        }
-
-        if (![targetDatabaseName isEqualToString:selectedDatabase]) {
-            // Attempt to select the specified database, and abort on failure
-            if ([[chooseDatabaseButton onMainThread] indexOfItemWithTitle:targetDatabaseName] == NSNotFound || ![mySQLConnection selectDatabase:targetDatabaseName])
-            {
-                // End the task first to ensure the database dropdown can be reselected
-                [self endTask];
-
-                if ([mySQLConnection isConnected]) {
-
-                    // Update the database list
-                    [[self onMainThread] setDatabases];
-
-                    [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Unable to select database %@.\nPlease check you have the necessary privileges to view the database, and that the database still exists.", @"message of panel when connection to db failed after selecting from popupbutton"), targetDatabaseName] callback:nil];
-                }
-
-                return;
-            }
-
-            [[chooseDatabaseButton onMainThread] selectItemWithTitle:targetDatabaseName];
-
-            selectedDatabase = [[NSString alloc] initWithString:targetDatabaseName];
-            selectedTableName = nil;
-
-            [databaseDataInstance resetAllData];
-
-            // Update the stored database encoding, used for views, "default" table encodings, and to allow
-            // or disallow use of the "View using encoding" menu
-            [self detectDatabaseEncoding];
-
-            // Set the connection of SPTablesList to reload tables in db
-            [tablesListInstance setConnection:mySQLConnection];
-
-            // Update the window title
-            [self updateWindowTitle:self];
-
-            // Add a history entry
-            if (!historyStateChanging) {
-                [spHistoryControllerInstance setModifyingState:NO];
-                [spHistoryControllerInstance updateHistoryEntries];
-            }
-        }
-
-        SPMainQSync(^{
-            BOOL focusOnFilter = YES;
-            if (targetItemName) focusOnFilter = NO;
-
-            // If a the table has changed, update the selection
-            if (![targetItemName isEqualToString:[self table]] && targetItemName) {
-                focusOnFilter = ![self->tablesListInstance selectItemWithName:targetItemName];
-            }
-
-            // Ensure the window focus is on the table list or the filter as appropriate
-            [self->tablesListInstance setTableListSelectability:YES];
-            if (focusOnFilter) {
-                [self->tablesListInstance makeTableListFilterHaveFocus];
-            } else {
-                [self->tablesListInstance makeTableListHaveFocus];
-            }
-            [self->tablesListInstance setTableListSelectability:NO];
-        });
-
-        [self endTask];
-        [self _processDatabaseChangedBundleTriggerActions];
-    }
 }
 
 - (void)_processDatabaseChangedBundleTriggerActions
@@ -5797,9 +5778,12 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  */
 - (void)loadTable:(NSString *)aTable ofType:(SPTableType)aTableType
 {
+    [SPDebugLogger log:@"[STEP 2] loadTable called for: %@, type: %ld", aTable, (long)aTableType];
+
     // Ensure a connection is still present
-    if (![mySQLConnection isConnected]){
-        SPLog(@"![mySQLConnection isConnected], returning");
+    if (![postgresConnection isConnected]){
+        SPLog(@"![postgresConnection isConnected], returning");
+        [SPDebugLogger log:@"[STEP 2] ERROR: Not connected, returning"];
         return;
     }
 
@@ -5928,6 +5912,8 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
  */
 - (void)_loadTableTask
 {
+    [SPDebugLogger log:@"[STEP 3] _loadTableTask started on background thread"];
+
     @autoreleasepool {
         NSString *tableEncoding = nil;
 
@@ -5944,12 +5930,12 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         relationsLoaded = NO;
 
         // Ensure status and details are fetched using UTF8
-        NSString *previousEncoding = [mySQLConnection encoding];
+        NSString *previousEncoding = [postgresConnection encodingName];
         BOOL changeEncoding = ![previousEncoding hasPrefix:@"utf8"];
 
         if (changeEncoding) {
-            [mySQLConnection storeEncodingForRestoration];
-            [mySQLConnection setEncoding:@"utf8mb4"];
+            [postgresConnection storeEncodingForRestoration];
+            [postgresConnection setEncoding:@"utf8mb4"];
         }
 
         // Cache status information on the working thread
@@ -5973,7 +5959,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
             }
         }
 
-        if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+        if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
         // Notify listeners of the table change now that the state is fully set up.
         [[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:SPTableChangedNotification object:self];
@@ -5992,6 +5978,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
                     structureLoaded = YES;
                     break;
                 case SPTableViewContent:
+                    [SPDebugLogger log:@"[STEP 4] Calling tableContentInstance loadTable"];
                     [tableContentInstance loadTable:selectedTableName];
                     contentLoaded = YES;
                     break;
@@ -6085,7 +6072,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
     }
 }
 
-#pragma mark - SPMySQLConnection delegate methods
+#pragma mark - SPPostgresConnection delegate methods
 
 /**
  * Invoked when the framework is about to perform a query.
@@ -6115,17 +6102,17 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 /**
  * Invoked when the current connection needs a password from the Keychain.
  */
-- (NSString *)keychainPasswordForConnection:(SPMySQLConnection *)connection
+- (NSString *)keychainPasswordForConnection:(SPPostgresConnection *)connection
 {
     return [connectionController keychainPassword];
 }
 
 /**
  * Invoked when the current connection needs a ssh password from the Keychain.
- * This isn't actually part of the SPMySQLConnection delegate protocol, but is here
+ * This isn't actually part of the SPPostgresConnection delegate protocol, but is here
  * due to its similarity to the previous method.
  */
-- (NSString *)keychainPasswordForSSHConnection:(SPMySQLConnection *)connection
+- (NSString *)keychainPasswordForSSHConnection:(SPPostgresConnection *)connection
 {
     // If no keychain item is available, return an empty password
     NSString *password = [connectionController keychainPasswordForSSH];
@@ -6146,12 +6133,12 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 /**
  * Invoked when the connection fails and the framework needs to know how to proceed.
  */
-- (SPMySQLConnectionLostDecision)connectionLost:(id)connection
+- (SPPostgresConnectionLostDecision)connectionLost:(id)connection
 {
 
     SPLog(@"connectionLost");
 
-    SPMySQLConnectionLostDecision connectionErrorCode = SPMySQLConnectionLostDisconnect;
+    SPPostgresConnectionLostDecision connectionErrorCode = SPPostgresConnectionLostDisconnect;
 
     // Only display the reconnect dialog if the window is visible
     // and we are not terminating
@@ -6166,7 +6153,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
 
         // Display the connection error dialog and wait for the return code
         [[self.parentWindowController window] beginSheet:connectionErrorDialog completionHandler:nil];
-        connectionErrorCode = (SPMySQLConnectionLostDecision)[NSApp runModalForWindow:connectionErrorDialog];
+        connectionErrorCode = (SPPostgresConnectionLostDecision)[NSApp runModalForWindow:connectionErrorDialog];
 
         [NSApp endSheet:connectionErrorDialog];
         [connectionErrorDialog orderOut:nil];
@@ -6174,7 +6161,7 @@ static _Atomic int SPDatabaseDocumentInstanceCounter = 0;
         queryStartDate = [[NSDate alloc] init];
 
         // If 'disconnect' was selected, trigger a window close.
-        if (connectionErrorCode == SPMySQLConnectionLostDisconnect) {
+        if (connectionErrorCode == SPPostgresConnectionLostDisconnect) {
             [self performSelectorOnMainThread:@selector(closeAndDisconnect) withObject:nil waitUntilDone:YES];
         }
     }

@@ -32,7 +32,7 @@
 #import "SPTableCopy.h"
 #import "SPCreateDatabaseInfo.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 @implementation SPDatabaseCopy
 

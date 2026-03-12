@@ -30,10 +30,10 @@
 
 #import "SPDatabaseData.h"
 #import "SPServerSupport.h"
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 #import "SPFunctions.h"
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 @interface SPDatabaseData ()
 
@@ -106,7 +106,7 @@ NSInteger _sortStorageEngineEntry(NSDictionary *itemOne, NSDictionary *itemTwo, 
 }
 
 /**
- * Returns all of the database's currently available collations by querying information_schema.collations.
+ * Returns all of the database's currently available collations by querying pg_collation.
  *
  * This method is thread-safe.
  */
@@ -115,13 +115,10 @@ NSInteger _sortStorageEngineEntry(NSDictionary *itemOne, NSDictionary *itemTwo, 
 	@synchronized(charsetCollationLock) {
 		if ([collations count] == 0) {
 			
-			// Try to retrieve the available collations from the database
-            [collations addObjectsFromArray:[self _getDatabaseDataForQuery:@"SELECT * FROM `information_schema`.`collations` ORDER BY `collation_name` ASC"]];
+			// For PostgreSQL, use pg_collation instead of information_schema.collations
+			[collations addObjectsFromArray:[self _getDatabaseDataForQuery:@"SELECT collname AS COLLATION_NAME, 'UTF8' AS CHARACTER_SET_NAME FROM pg_collation ORDER BY collname ASC LIMIT 100"]];
 			
-			// If that failed, get the list of collations from the hard-coded list
-			if (![collations count]) {
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:NSLocalizedString(@"Unable to get database collations", @"Unable to get database collations") callback:nil];
-			}
+			// No error alert for PostgreSQL - collations work differently
 		}
 			
 		return [NSArray arrayWithArray:collations];
@@ -137,8 +134,14 @@ NSInteger _sortStorageEngineEntry(NSDictionary *itemOne, NSDictionary *itemTwo, 
 - (NSArray *)getDatabaseCollationsForEncoding:(NSString *)encoding
 {
 	@synchronized(charsetCollationLock) {
-		if (encoding && ((characterSetEncoding == nil) || (![characterSetEncoding isEqualToString:encoding]) || ([characterSetCollations count] == 0))) {
-			 //depends on encoding
+		// PostgreSQL handles collations differently than MySQL
+		// In PostgreSQL, collations are tied to the database locale, not per-column encoding
+		// Return empty array silently instead of showing error alerts
+		if (!encoding || [encoding length] == 0) {
+			return @[];
+		}
+		
+		if (((characterSetEncoding == nil) || (![characterSetEncoding isEqualToString:encoding]) || ([characterSetCollations count] == 0))) {
 			[characterSetCollations removeAllObjects];
 			
 			characterSetEncoding = [[NSString alloc] initWithString:encoding];
@@ -149,30 +152,20 @@ NSInteger _sortStorageEngineEntry(NSDictionary *itemOne, NSDictionary *itemTwo, 
 				goto copy_return;
 			}
 
-			// Try to retrieve the available collations for the supplied encoding from the database
-            [characterSetCollations addObjectsFromArray:[self _getDatabaseDataForQuery:[NSString stringWithFormat:@"SELECT * FROM `information_schema`.`collations` WHERE character_set_name = '%@' ORDER BY `collation_name` ASC", characterSetEncoding]]];
-
-            //Special handling to try utf8 if the encoding is utf8mb3 https://github.com/Sequel-Ace/Sequel-Ace/issues/1064
-            if (![characterSetCollations count] && [characterSetEncoding isEqualToString:@"utf8mb3"]) {
-                [characterSetCollations addObjectsFromArray:[self _getDatabaseDataForQuery:[NSString stringWithFormat:@"SELECT * FROM `information_schema`.`collations` WHERE character_set_name = '%@' ORDER BY `collation_name` ASC", @"utf8"]]];
-            } else if (![characterSetCollations count] && [characterSetEncoding isEqualToString:@"utf8"]) {
-                [characterSetCollations addObjectsFromArray:[self _getDatabaseDataForQuery:[NSString stringWithFormat:@"SELECT * FROM `information_schema`.`collations` WHERE character_set_name = '%@' ORDER BY `collation_name` ASC", @"utf8mb3"]]];
-            }
-
-			// If that failed, get the list of collations matching the supplied encoding from the hard-coded list
-			if (![characterSetCollations count]) {
-                SPMainQSync(^{
-                    [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:NSLocalizedString(@"Unable to get database collations for given encoding", @"Unable to get database collations for given encoding") callback:nil];
-                });
+			// For PostgreSQL, query pg_collation instead of information_schema.collations
+			// PostgreSQL collations are not filtered by encoding the same way MySQL does
+			NSArray *results = [self _getDatabaseDataForQuery:@"SELECT collname AS COLLATION_NAME, 'Yes' AS IS_DEFAULT FROM pg_collation ORDER BY collname ASC LIMIT 50"];
+			
+			if ([results count]) {
+				[characterSetCollations addObjectsFromArray:results];
 			}
 
 			if ([characterSetCollations count]) {
 				[cachedCollationsByEncoding setObject:[NSArray arrayWithArray:characterSetCollations] forKey:characterSetEncoding];
 			}
-
 		}
 copy_return:
-		return [NSArray arrayWithArray:characterSetCollations]; //copy because it is a mutable array and we keep changing it
+		return [NSArray arrayWithArray:characterSetCollations];
 	}
 }
 
@@ -230,29 +223,15 @@ copy_return:
  */
 - (NSArray *)getDatabaseStorageEngines
 {	
-	if ([storageEngines count] == 0) {
-        // Check the information_schema.engines table is accessible
-        SPMySQLResult *result = [connection queryString:@"SHOW TABLES IN information_schema LIKE 'ENGINES'"];
-        
-        if ([result numberOfRows] == 1) {
-            
-            // Table is accessible so get available storage engines
-            // Note, that the case of the column names specified in this query are important.
-            [storageEngines addObjectsFromArray:[self _getDatabaseDataForQuery:@"SELECT Engine, Support FROM `information_schema`.`engines` WHERE SUPPORT IN ('DEFAULT', 'YES') AND Engine != 'PERFORMANCE_SCHEMA'"]];
-        }
-	}
-	
-	return [storageEngines sortedArrayUsingFunction:_sortStorageEngineEntry context:nil];
+	return @[];
 }
 
 /**
  * Returns all of the database's currently available character set encodings 
- * @return [{Charset: 'utf8',Description: 'UTF-8 Unicode', Default collation: 'utf8_general_ci',Maxlen: 3},...]
+ * @return [{CHARACTER_SET_NAME: 'UTF8', ...},...] for PostgreSQL
  *         The Array is never empty and never nil but results might be unreliable.
  *
- * On MySQL 5+ this will query information_schema.character_sets
- * On MySQL 4.1+ this will query SHOW CHARACTER SET
- * Else a hardcoded list will be returned
+ * For PostgreSQL this queries pg_encoding
  *
  * This method is thread-safe.
  */ 
@@ -261,17 +240,20 @@ copy_return:
 	@synchronized(charsetCollationLock) {
 		if ([characterSetEncodings count] == 0) {
 			
-			// Try to retrieve the available character set encodings from the database
-			// Check the information_schema.character_sets table is accessible
-            [characterSetEncodings addObjectsFromArray:[self _getDatabaseDataForQuery:@"SELECT * FROM `information_schema`.`character_sets` ORDER BY `character_set_name` ASC"]];
-
-			// If that failed, get the list of character set encodings from the hard-coded list
-			if (![characterSetEncodings count]) {			
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:NSLocalizedString(@"Unable to get database character set encodings", @"Unable to get database character set encodings") callback:nil];
+			// For PostgreSQL, get encoding from current database
+			// PostgreSQL doesn't have a character_sets table like MySQL
+			// Return the server encoding as the available encoding
+			NSArray *results = [self _getDatabaseDataForQuery:@"SELECT pg_encoding_to_char(encoding) AS CHARACTER_SET_NAME, pg_encoding_to_char(encoding) AS DESCRIPTION FROM pg_database WHERE datname = current_database()"];
+			
+			if ([results count]) {
+				[characterSetEncodings addObjectsFromArray:results];
+			} else {
+				// Fallback: add UTF8 as default
+				[characterSetEncodings addObject:@{@"CHARACTER_SET_NAME": @"UTF8", @"DESCRIPTION": @"UTF-8 Unicode"}];
 			}
 		}
 			
-		return [NSArray arrayWithArray:characterSetEncodings]; //return a copy since we keep changing it
+		return [NSArray arrayWithArray:characterSetEncodings];
 	}
 }
 
@@ -387,7 +369,17 @@ copy_return:
  */
 - (NSString *)_getSingleVariableValue:(NSString *)variable
 {
-	SPMySQLResult *result = [connection queryString:[NSString stringWithFormat:@"SHOW VARIABLES LIKE %@", [variable tickQuotedString]]];;
+    // Map MySQL variables to Postgres settings
+    NSString *postgresSetting = variable;
+    if ([variable isEqualToString:@"character_set_database"] || [variable isEqualToString:@"character_set_server"]) {
+        postgresSetting = @"server_encoding";
+    } else if ([variable isEqualToString:@"collation_database"] || [variable isEqualToString:@"collation_server"]) {
+        postgresSetting = @"lc_collate";
+    } else if ([variable isEqualToString:@"storage_engine"] || [variable isEqualToString:@"default_storage_engine"]) {
+        return @"HEAP"; // Default Postgres access method
+    }
+
+	SPPostgresResult *result = [connection queryString:[NSString stringWithFormat:@"SELECT current_setting('%@')", postgresSetting]];
 	
 	[result setReturnDataAsStrings:YES];
 	
@@ -397,7 +389,7 @@ copy_return:
 	if ([result numberOfRows] != 1)
 		return nil;
 	
-	return [[result getRowAsDictionary] objectForKey:@"Value"];
+	return [[result getRowAsArray] firstObject];
 }
 
 /**
@@ -406,13 +398,27 @@ copy_return:
  */
 - (NSArray *)_getDatabaseDataForQuery:(NSString *)query
 {
-	SPMySQLResult *result = [connection queryString:query];
+	SPPostgresResult *result = [connection queryString:query];
 	
 	if ([connection queryErrored]) return @[];
 	
 	[result setReturnDataAsStrings:YES];
 	
-	return [result getAllRows];
+	// Get rows as dictionaries
+	NSArray *rawRows = [result getAllRowsAsDictionaries];
+	
+	// PostgreSQL returns lowercase column names, but much of the code expects uppercase (MySQL style)
+	// Convert all keys to uppercase for compatibility
+	NSMutableArray *uppercasedRows = [NSMutableArray arrayWithCapacity:[rawRows count]];
+	for (NSDictionary *row in rawRows) {
+		NSMutableDictionary *uppercasedRow = [NSMutableDictionary dictionaryWithCapacity:[row count]];
+		for (NSString *key in row) {
+			[uppercasedRow setObject:[row objectForKey:key] forKey:[key uppercaseString]];
+		}
+		[uppercasedRows addObject:uppercasedRow];
+	}
+	
+	return uppercasedRows;
 }
 
 
@@ -422,6 +428,174 @@ copy_return:
 NSInteger _sortStorageEngineEntry(NSDictionary *itemOne, NSDictionary *itemTwo, void *context)
 {
 	return [[itemOne objectForKey:@"Engine"] compare:[itemTwo objectForKey:@"Engine"]];
+}
+
+#pragma mark -
+#pragma mark PostgreSQL Schema Operations
+
+/**
+ * Returns all available schemas in the current database.
+ */
+- (NSArray *)getDatabaseSchemas
+{
+	NSString *query = @"SELECT nspname AS schema_name FROM pg_namespace "
+					   "WHERE nspname NOT LIKE 'pg_%' "
+					   "AND nspname != 'information_schema' "
+					   "ORDER BY nspname";
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all sequences in the specified schema.
+ */
+- (NSArray *)getSequencesForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT sequence_name, data_type, start_value, minimum_value, maximum_value, increment "
+		 "FROM information_schema.sequences WHERE sequence_schema = '%@' ORDER BY sequence_name", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all materialized views in the specified schema.
+ */
+- (NSArray *)getMaterializedViewsForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT matviewname AS name, matviewowner AS owner, ispopulated "
+		 "FROM pg_matviews WHERE schemaname = '%@' ORDER BY matviewname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all domains in the specified schema.
+ */
+- (NSArray *)getDomainsForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT domain_name, data_type, domain_default, character_maximum_length "
+		 "FROM information_schema.domains WHERE domain_schema = '%@' ORDER BY domain_name", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all aggregate functions in the specified schema.
+ */
+- (NSArray *)getAggregatesForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT p.proname AS aggregate_name, pg_get_function_arguments(p.oid) AS arguments "
+		 "FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid "
+		 "WHERE n.nspname = '%@' AND p.prokind = 'a' ORDER BY p.proname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all operators in the specified schema.
+ */
+- (NSArray *)getOperatorsForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT o.oprname AS operator_name, "
+		 "COALESCE(lt.typname, 'NONE') AS left_type, "
+		 "COALESCE(rt.typname, 'NONE') AS right_type, "
+		 "rest.typname AS result_type "
+		 "FROM pg_operator o "
+		 "JOIN pg_namespace n ON o.oprnamespace = n.oid "
+		 "LEFT JOIN pg_type lt ON o.oprleft = lt.oid "
+		 "LEFT JOIN pg_type rt ON o.oprright = rt.oid "
+		 "JOIN pg_type rest ON o.oprresult = rest.oid "
+		 "WHERE n.nspname = '%@' ORDER BY o.oprname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all FTS configurations in the specified schema.
+ */
+- (NSArray *)getFTSConfigurationsForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT cfgname AS config_name, cfgowner::regrole AS owner "
+		 "FROM pg_ts_config c JOIN pg_namespace n ON c.cfgnamespace = n.oid "
+		 "WHERE n.nspname = '%@' ORDER BY cfgname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all FTS dictionaries in the specified schema.
+ */
+- (NSArray *)getFTSDictionariesForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT dictname AS dictionary_name, dictowner::regrole AS owner "
+		 "FROM pg_ts_dict d JOIN pg_namespace n ON d.dictnamespace = n.oid "
+		 "WHERE n.nspname = '%@' ORDER BY dictname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all foreign tables in the specified schema.
+ */
+- (NSArray *)getForeignTablesForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT foreign_table_name, foreign_server_name "
+		 "FROM information_schema.foreign_tables WHERE foreign_table_schema = '%@' ORDER BY foreign_table_name", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all custom types in the specified schema.
+ */
+- (NSArray *)getTypesForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT t.typname AS type_name, "
+		 "CASE t.typtype "
+		 "  WHEN 'c' THEN 'composite' "
+		 "  WHEN 'e' THEN 'enum' "
+		 "  WHEN 'r' THEN 'range' "
+		 "  WHEN 'd' THEN 'domain' "
+		 "  ELSE 'other' END AS type_category "
+		 "FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid "
+		 "WHERE n.nspname = '%@' AND t.typtype IN ('c', 'e', 'r') ORDER BY t.typname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all collations in the specified schema.
+ */
+- (NSArray *)getCollationsForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT collname AS collation_name, collprovider AS provider "
+		 "FROM pg_collation c JOIN pg_namespace n ON c.collnamespace = n.oid "
+		 "WHERE n.nspname = '%@' ORDER BY collname", schema];
+	return [self _getDatabaseDataForQuery:query];
+}
+
+/**
+ * Returns all trigger functions in the specified schema.
+ */
+- (NSArray *)getTriggerFunctionsForSchema:(NSString *)schema
+{
+	if (!schema) schema = @"public";
+	NSString *query = [NSString stringWithFormat:
+		@"SELECT p.proname AS function_name, pg_get_function_result(p.oid) AS return_type "
+		 "FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid "
+		 "JOIN pg_type t ON p.prorettype = t.oid "
+		 "WHERE n.nspname = '%@' AND t.typname = 'trigger' ORDER BY p.proname", schema];
+	return [self _getDatabaseDataForQuery:query];
 }
 
 #pragma mark -

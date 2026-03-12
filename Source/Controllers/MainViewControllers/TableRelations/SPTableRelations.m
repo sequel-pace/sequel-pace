@@ -36,9 +36,9 @@
 #import "RegexKitLite.h"
 #import "SPServerSupport.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 static NSString *SPRelationNameKey       = @"name";
 static NSString *SPRelationColumnsKey    = @"columns";
@@ -148,18 +148,18 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
     NSString *thatTable  = [refTablePopUpButton titleOfSelectedItem];
     NSString *thatColumn = [refColumnPopUpButton titleOfSelectedItem];
 
-	NSString *query = [NSString stringWithFormat:@"ALTER TABLE %@ ADD ",[thisTable backtickQuotedString]];
+	NSString *query = [NSString stringWithFormat:@"ALTER TABLE %@ ADD ",[thisTable postgresQuotedIdentifier]];
 	
 	// Set constraint name?
 	if ([[constraintName stringValue] length] > 0) {
-		query = [query stringByAppendingString:[NSString stringWithFormat:@"CONSTRAINT %@ ", [[constraintName stringValue] backtickQuotedString]]];
+		query = [query stringByAppendingString:[NSString stringWithFormat:@"CONSTRAINT %@ ", [[constraintName stringValue] postgresQuotedIdentifier]]];
 	}
 	
 	query = [query stringByAppendingString:[NSString stringWithFormat:@"FOREIGN KEY (%@) REFERENCES %@.%@ (%@)",
-                                            [thisColumn backtickQuotedString],
-                                            [thatDatabase backtickQuotedString],
-                                            [thatTable backtickQuotedString],
-                                            [thatColumn backtickQuotedString]]];
+                                            [thisColumn postgresQuotedIdentifier],
+                                            [thatDatabase postgresQuotedIdentifier],
+                                            [thatTable postgresQuotedIdentifier],
+                                            [thatColumn postgresQuotedIdentifier]]];
 
 	NSArray *onActions = @[@"RESTRICT", @"CASCADE", @"SET NULL", @"NO ACTION"];
 	
@@ -190,27 +190,12 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
 		// An error ID of 1005 indicates a foreign key error.  These are thrown for many reasons, but the two
 		// most common are 121 (name probably in use) and 150 (types don't exactly match).
 		// Retrieve the InnoDB status and extract the most recent error for more helpful text.
-		if ([connection lastErrorID] == 1005) {
-            NSString *statusText = [[[connection queryString:@"SHOW ENGINE INNODB STATUS"] getRowAsArray] objectAtIndex:2];
-            NSString *detailErrorString = [statusText stringByMatching:@"latest foreign key error\\s+-----*\\s+[0-9: ]*(.*?)\\s+-----" options:(RKLCaseless | RKLDotAll) inRange:NSMakeRange(0, [statusText length]) capture:1L error:NULL];
-            if (detailErrorString) {
-                accessoryView = detailErrorView;
-                [detailErrorText setString:[detailErrorString stringByReplacingOccurrencesOfString:@"\n" withString:@" "]];
-            }
-            
-            // Detect name duplication if appropriate
-            if ([errorText isMatchedByRegex:@"errno: 121"] && [errorText isMatchedByRegex:@"already exists"]) {
-                [takenConstraintNames addObject:[[constraintName stringValue] lowercaseString]];
-                [self controlTextDidChange:[NSNotification notificationWithName:@"dummy" object:constraintName]];
-            }
-		}
-
 		if (accessoryView) {
-			[NSAlert createAccessoryWarningAlertWithTitle:NSLocalizedString(@"Error creating relation", @"error creating relation message") message:[NSString stringWithFormat:NSLocalizedString(@"The specified relation could not be created.\n\nMySQL said: %@", @"error creating relation informative message"), errorText] accessoryView:accessoryView callback:^{
+			[NSAlert createAccessoryWarningAlertWithTitle:NSLocalizedString(@"Error creating relation", @"error creating relation message") message:[NSString stringWithFormat:NSLocalizedString(@"The specified relation could not be created.\n\nPostgreSQL said: %@", @"error creating relation informative message"), errorText] accessoryView:accessoryView callback:^{
 						 [self performSelector:@selector(openRelationSheet:) withObject:self afterDelay:0.0];
 			}];
 		} else {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error creating relation", @"error creating relation message") message:[NSString stringWithFormat:NSLocalizedString(@"The specified relation could not be created.\n\nMySQL said: %@", @"error creating relation informative message"), errorText] callback:^{
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error creating relation", @"error creating relation message") message:[NSString stringWithFormat:NSLocalizedString(@"The specified relation could not be created.\n\nPostgreSQL said: %@", @"error creating relation informative message"), errorText] callback:^{
 				[self performSelector:@selector(openRelationSheet:) withObject:self afterDelay:0.0];
 			}];
 		}
@@ -263,7 +248,7 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
     [refDatabasePopUpButton removeAllItems];
 	[refTablePopUpButton removeAllItems];
 
-	BOOL changeEncoding = ![[connection encoding] hasPrefix:@"utf8"];
+	BOOL changeEncoding = NO; // PostgreSQL always uses UTF8
 
 	// Use UTF8 for identifier-based queries
 	if (changeEncoding) {
@@ -276,7 +261,7 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
     // Set selected item to the current database
     [refDatabasePopUpButton selectItemWithTitle:[tableDocumentInstance database]];
 
-	// Get all InnoDB tables in the current database
+	// Get all tables in the current database
     [self _updateAvailableTables];
 
 	// Reset other fields
@@ -303,13 +288,13 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
 
 			[selectedSet enumerateIndexesWithOptions:NSEnumerationReverse usingBlock:^(NSUInteger row, BOOL * _Nonnull stop) {
 				NSString *relationName = [[self->relationData objectAtIndex:row] objectForKey:SPRelationNameKey];
-				NSString *query = [NSString stringWithFormat:@"ALTER TABLE %@ DROP FOREIGN KEY %@", [thisTable backtickQuotedString], [relationName backtickQuotedString]];
+				NSString *query = [NSString stringWithFormat:@"ALTER TABLE %@ DROP CONSTRAINT %@", [thisTable postgresQuotedIdentifier], [relationName postgresQuotedIdentifier]];
 
 				[self->connection queryString:query];
 
 				if ([self->connection queryErrored]) {
 
-					[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to delete relation", @"error deleting relation message") message:[NSString stringWithFormat:NSLocalizedString(@"The selected relation couldn't be deleted.\n\nMySQL said: %@", @"error deleting relation informative message"), [self->connection lastErrorMessage]] callback:nil];
+					[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Unable to delete relation", @"error deleting relation message") message:[NSString stringWithFormat:NSLocalizedString(@"The selected relation couldn't be deleted.\n\nPostgreSQL said: %@", @"error deleting relation informative message"), [self->connection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 					// Abort loop
 					*stop = YES;
 				}
@@ -343,8 +328,8 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
 	// Get the current table's storage engine
 	NSString *engine = [tableDataInstance statusValueForKey:@"Engine"];
 
-    // check engine is not nill before calling lowercase on it.
-	if ((engine != nil) && ([tablesListInstance tableType] == SPTableTypeTable) && ([[engine lowercaseString] isEqualToString:@"innodb"])) {
+    // Postgres supports relations on standard tables
+	if ((engine != nil) && ([tablesListInstance tableType] == SPTableTypeTable)) {
 
 		// Update the text label
 		[labelTextField setStringValue:[NSString stringWithFormat:NSLocalizedString(@"Relations for table: %@", @"Relations tab subtitle showing table name"), [tablesListInstance tableName]]];
@@ -358,7 +343,7 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
 		[refreshRelationsButton setEnabled:NO];
 		[relationsTableView setEnabled:NO];
 
-		[labelTextField setStringValue:([tablesListInstance tableType] == SPTableTypeTable) ? NSLocalizedString(@"This table currently does not support relations. Only tables that use the InnoDB storage engine support them.", @"This table currently does not support relations. Only tables that use the InnoDB storage engine support them.") : @""];
+		[labelTextField setStringValue:([tablesListInstance tableType] == SPTableTypeTable) ? NSLocalizedString(@"This table currently does not support relations.", @"This table currently does not support relations.") : @""];
 	}
 
 	[self _refreshRelationDataForcingCacheRefresh:NO];
@@ -599,11 +584,11 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
     [refColumnPopUpButton setEnabled:NO];
     [confirmAddRelationButton setEnabled:NO];
 
-    // Get all InnoDB tables in the current database
+    // Get all tables in the current database
     [refTablePopUpButton removeAllItems];
     if (database != nil && database.length != 0) {
-        SPMySQLResult *result = [connection queryString:[NSString stringWithFormat:@"SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND engine = 'InnoDB' AND table_schema = %@ ORDER BY table_name ASC", [database tickQuotedString]]];
-        [result setDefaultRowReturnType:SPMySQLResultRowAsArray];
+        SPPostgresResult *result = [connection queryString:[NSString stringWithFormat:@"SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = 'public' ORDER BY table_name ASC"]]; // Assuming public schema for now
+        [result setDefaultRowReturnType:SPPostgresResultRowAsArray];
         [result setReturnDataAsStrings:YES]; // TODO: Workaround for #2699/#2700
         for (NSArray *eachRow in result) {
             [refTablePopUpButton safeAddItemWithTitle:[eachRow firstObject]];

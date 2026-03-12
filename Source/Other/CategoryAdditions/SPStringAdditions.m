@@ -33,7 +33,7 @@
 #include <stdlib.h>
 #import <CommonCrypto/CommonDigest.h>
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 static NSInteger _smallestOf(NSInteger a, NSInteger b, NSInteger c);
 
@@ -210,7 +210,12 @@ static NSInteger _smallestOf(NSInteger a, NSInteger b, NSInteger c);
  */
 - (NSString *)backtickQuotedString
 {
-	return [NSString stringWithFormat: @"`%@`", [self stringByReplacingOccurrencesOfString:@"`" withString:@"``"]];
+	return [self postgresQuotedIdentifier];
+}
+
+- (NSString *)postgresQuotedIdentifier
+{
+	return [NSString stringWithFormat: @"\"%@\"", [self stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""]];
 }
 
 /**

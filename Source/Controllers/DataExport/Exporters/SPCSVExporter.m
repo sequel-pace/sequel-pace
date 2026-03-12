@@ -36,7 +36,8 @@
 #import "SPExportController.h"
 #import "SPFunctions.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
+#import "SPPostgresGeometryData.h"
 
 @implementation SPCSVExporter
 
@@ -81,7 +82,7 @@
     
     NSArray *csvRow = nil;
     NSScanner *csvNumericTester = nil;
-    SPMySQLFastStreamingResult *streamingResult = nil;
+    SPPostgresStreamingResult *streamingResult = nil;
     NSString *escapedEscapeString, *escapedFieldSeparatorString, *escapedEnclosingString, *escapedLineEndString, *dataConversionString;
     
     id csvCell;
@@ -126,15 +127,21 @@
     // is being exported
     if ([self csvTableName] && (![self csvDataArray])) {
         NSDictionary *tableDetails = nil;
-        
-        // Determine whether the supplied table is actually a table or a view via the CREATE TABLE command, and get the table details
-        SPMySQLResult *queryResult = [connection queryString:[NSString stringWithFormat:@"SHOW CREATE TABLE %@", [[self csvTableName] backtickQuotedString]]];
+
+        // Determine whether the supplied table is actually a table or a view using PostgreSQL system catalogs
+        // PostgreSQL: Query pg_class to determine if this is a view ('v') or table ('r')
+        SPPostgresResult *queryResult = [connection queryString:[NSString stringWithFormat:
+            @"SELECT relkind FROM pg_class c "
+            @"JOIN pg_namespace n ON c.relnamespace = n.oid "
+            @"WHERE n.nspname = 'public' AND c.relname = %@",
+            [[self csvTableName] tickQuotedString]]];
         [queryResult setReturnDataAsStrings:YES];
-        
+
         if ([queryResult numberOfRows]) {
-            id object = [[queryResult getRowAsDictionary] objectForKey:@"Create View"];
-            
-            tableDetails = [[NSDictionary alloc] initWithDictionary:(object) ? [[self csvTableData] informationForView:[self csvTableName]] : [[self csvTableData] informationForTable:[self csvTableName] fromDatabase:nil]];
+            NSDictionary *row = [queryResult getRowAsDictionary];
+            BOOL isView = [[row objectForKey:@"relkind"] isEqualToString:@"v"];
+
+            tableDetails = [[NSDictionary alloc] initWithDictionary:(isView) ? [[self csvTableData] informationForView:[self csvTableName]] : [[self csvTableData] informationForTable:[self csvTableName] fromDatabase:nil]];
         }
         
         // Retrieve the table details via the data class, and use it to build an array containing column numeric status
@@ -152,8 +159,8 @@
     
     // Make a streaming request for the data if the data array isn't set
     if ((![self csvDataArray]) && [self csvTableName]) {
-        totalRows		= [[connection getFirstFieldFromQuery:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [[self csvTableName] backtickQuotedString]]] integerValue];
-        streamingResult = [connection streamingQueryString:[NSString stringWithFormat:@"SELECT * FROM %@", [[self csvTableName] backtickQuotedString]] useLowMemoryBlockingStreaming:[self exportUsingLowMemoryBlockingStreaming]];
+        totalRows		= [[connection getFirstFieldFromQuery:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [[self csvTableName] postgresQuotedIdentifier]]] integerValue];
+        streamingResult = [connection streamingQueryString:[NSString stringWithFormat:@"SELECT * FROM %@", [[self csvTableName] postgresQuotedIdentifier]] useLowMemoryBlockingStreaming:[self exportUsingLowMemoryBlockingStreaming]];
     }
     
     // Detect and restore special characters being used as terminating or line end strings
@@ -289,7 +296,7 @@
                 
                 [csvCellString setString:[NSString stringWithString:dataConversionString]];
             }
-            else if ([csvCell isKindOfClass:[SPMySQLGeometryData class]]) {
+            else if ([csvCell isKindOfClass:[SPPostgresGeometryData class]]) {
                 [csvCellString setString:[csvCell wktString]];
             }
             else {

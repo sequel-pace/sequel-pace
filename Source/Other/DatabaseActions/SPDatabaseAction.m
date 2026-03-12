@@ -31,7 +31,7 @@
 #import "SPDatabaseAction.h"
 #import "SPCreateDatabaseInfo.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 #pragma mark -
 
@@ -56,14 +56,16 @@
 		return NO;
 	}
 	
-	NSMutableString *query = [NSMutableString stringWithFormat:@"CREATE DATABASE %@", [database backtickQuotedString]];
+	NSMutableString *query = [NSMutableString stringWithFormat:@"CREATE DATABASE %@", [database postgresQuotedIdentifier]];
 	
 	if ([encoding length]) { // [nil length] == 0
-		[query appendFormat:@" DEFAULT CHARACTER SET = %@",[encoding backtickQuotedString]];
+		// Postgres uses ENCODING and LC_COLLATE/LC_CTYPE.
+		// [query appendFormat:@" DEFAULT CHARACTER SET = %@",[encoding postgresQuotedIdentifier]];
+		// [query appendFormat:@" DEFAULT COLLATE = %@",[collation postgresQuotedIdentifier]];
 	}
 
 	if ([collation length]) {
-		[query appendFormat:@" DEFAULT COLLATE = %@",[collation backtickQuotedString]];
+		// [query appendFormat:@" DEFAULT COLLATE = %@",[collation postgresQuotedIdentifier]];
 	}
 	
 	[connection queryString:query];

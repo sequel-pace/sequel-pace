@@ -49,11 +49,12 @@
 #import "SPBundleManager.h"
 #import "SPTableData.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
+#import "SPPostgresGeometryData.h"
 #import "pthread.h"
 #include <stdlib.h>
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 @import AppCenterAnalytics;
 
 NSInteger SPEditMenuCopy               = 2001;
@@ -175,7 +176,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 
 	// Loop through the rows, adding their descriptive contents
 	NSString *nullString = [prefs objectForKey:SPNullValue];
-	Class spmysqlGeometryData = [SPMySQLGeometryData class];
+	Class spmysqlGeometryData = [SPPostgresGeometryData class];
 	__block NSUInteger rowCounter = 0;
 
 	if((withBlobHandling == kBlobAsFile || withBlobHandling == kBlobAsImageFile) && tmpBlobFileDirectory && [tmpBlobFileDirectory length]) {
@@ -207,7 +208,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 						if (hexBlobs)
 							displayString = [[NSString alloc] initWithFormat:@"0x%@", [cellData dataToHexString]];
 						else
-							displayString = [[NSString alloc] initWithData:cellData encoding:[mySQLConnection stringEncoding]];
+							displayString = [[NSString alloc] initWithData:cellData encoding:[postgresConnection stringEncoding]];
 						if (!displayString) displayString = [[NSString alloc] initWithData:cellData encoding:NSISOLatin1StringEncoding];
 						if (displayString) {
 							[result appendFormat:@"%@\t", displayString];
@@ -312,7 +313,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 
 	// Loop through the rows, adding their descriptive contents
 	NSString *nullString = [prefs objectForKey:SPNullValue];
-	Class spmysqlGeometryData = [SPMySQLGeometryData class];
+	Class spmysqlGeometryData = [SPPostgresGeometryData class];
 
 	__block NSUInteger rowCounter = 0;
 
@@ -345,7 +346,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 						if (hexBlobs)
 							displayString = [[NSString alloc] initWithFormat:@"0x%@", [cellData dataToHexString]];
 						else
-							displayString = [[NSString alloc] initWithData:cellData encoding:[mySQLConnection stringEncoding]];
+							displayString = [[NSString alloc] initWithData:cellData encoding:[postgresConnection stringEncoding]];
 						if (!displayString) displayString = [[NSString alloc] initWithData:cellData encoding:NSISOLatin1StringEncoding];
 						if (displayString) {
 							[result appendFormat:@"\"%@\",", displayString];
@@ -553,7 +554,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 
 	// Begin the SQL string
 	[result appendFormat:@"INSERT INTO %@ (%@)\nVALUES\n",
-     [(selectedTable == nil) ? @"<table>" : selectedTable backtickQuotedString], [self componentsJoinedAndBacktickQuoted:tbColumns]];
+     [(selectedTable == nil) ? @"<table>" : selectedTable postgresQuotedIdentifier], [self componentsJoinedAndBacktickQuoted:tbColumns]];
 
 	NSUInteger rowIndex = [selectedRows firstIndex];
 	Class spTableContentClass = [SPTableContent class];
@@ -585,10 +586,10 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
                     }
                     // Use the argumentForRow to retrieve the missing information
                     // TODO - this could be preloaded for all selected rows rather than cell-by-cell
-                    cellData = [mySQLConnection getFirstFieldFromQuery:
+                    cellData = [postgresConnection getFirstFieldFromQuery:
                                 [NSString stringWithFormat:@"SELECT %@ FROM %@ WHERE %@",
-                                    [[data safeObjectForKey:kHeader] backtickQuotedString],
-                                    [selectedTable backtickQuotedString],
+                                    [[data safeObjectForKey:kHeader] postgresQuotedIdentifier],
+                                    [selectedTable postgresQuotedIdentifier],
                                     whereArgument]];
                 }
 
@@ -620,15 +621,15 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
                             }
                         
                             if ([cellData isKindOfClass:nsDataClass]) {
-                                [rowValues safeAddObject:[mySQLConnection escapeAndQuoteData:cellData]];
+                                [rowValues safeAddObject:[postgresConnection escapeAndQuoteData:cellData]];
                             } else {
-                                [rowValues safeAddObject:[mySQLConnection escapeAndQuoteString:[cellData description]]];
+                                [rowValues safeAddObject:[postgresConnection escapeAndQuoteString:[cellData description]]];
                             }
                             break;
 
                         // GEOMETRY
                         case 3:
-                            [rowValues safeAddObject:[mySQLConnection escapeAndQuoteData:[cellData data]]];
+                            [rowValues safeAddObject:[postgresConnection escapeAndQuoteData:[cellData data]]];
                             break;
 
                         default:
@@ -653,7 +654,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 			if ([value length] > 250000) {
 				[result appendFormat:@"%@);\n\nINSERT INTO %@ (%@)\nVALUES\n",
 						value,
-						[(selectedTable == nil) ? @"<table>" : selectedTable backtickQuotedString],
+						[(selectedTable == nil) ? @"<table>" : selectedTable postgresQuotedIdentifier],
                         [self componentsJoinedAndBacktickQuoted:tbColumns]];
 				[value setString:@""];
 			} 
@@ -691,7 +692,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
             if ([result length]) {
                 [result appendString: @", "];
             }
-            [result appendString:[header backtickQuotedString]];
+            [result appendString:[header postgresQuotedIdentifier]];
         }
     }
     return result;
@@ -725,8 +726,8 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 	// Loop through the rows, adding their descriptive contents
 	NSString *nullString = [prefs objectForKey:SPNullValue];
 	Class nsDataClass = [NSData class];
-	Class spmysqlGeometryData = [SPMySQLGeometryData class];
-	NSStringEncoding connectionEncoding = [mySQLConnection stringEncoding];
+	Class spmysqlGeometryData = [SPPostgresGeometryData class];
+	NSStringEncoding connectionEncoding = [postgresConnection stringEncoding];
 	BOOL hexBlobs = [prefs boolForKey:SPDisplayBinaryDataAsHex];
 	[selectedRows enumerateIndexesUsingBlock:^(NSUInteger rowIndex, BOOL * _Nonnull stop) {
 		for (NSUInteger c = 0; c < numColumns; c++ ) {
@@ -785,7 +786,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 - (void) setTableInstance:(id)anInstance withTableData:(SPDataStorage *)theTableStorage withColumns:(NSArray *)columnDefs withTableName:(NSString *)aTableName withConnection:(id)aMySqlConnection
 {
 	selectedTable     = aTableName;
-	mySQLConnection   = aMySqlConnection;
+	postgresConnection   = aMySqlConnection;
 	tableInstance     = anInstance;
 	tableStorage	  = theTableStorage;
 
@@ -870,7 +871,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 
 	NSUInteger columnIndex = (NSUInteger)[[columnDefinition objectForKey:@"datacolumnindex"] integerValue];
 	NSDictionary *stringAttributes = @{NSFontAttributeName : tableFont};
-	Class spmysqlGeometryData = [SPMySQLGeometryData class];
+	Class spmysqlGeometryData = [SPPostgresGeometryData class];
 	BOOL hexBlobs = [prefs boolForKey:SPDisplayBinaryDataAsHex];
 
 	// Check the number of rows available to check, sampling every n rows
@@ -895,7 +896,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 		if (!contentString)
 			continue;
 
-		// Get WKT string out of the SPMySQLGeometryData for calculation
+		// Get WKT string out of the SPPostgresGeometryData for calculation
 		else if ([contentString isKindOfClass:spmysqlGeometryData])
 			contentString = [contentString wktString];
 
@@ -914,7 +915,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 				if (hexBlobs)
 					contentString = [[NSString alloc] initWithFormat:@"0x%@", [(NSData *)contentString dataToHexString]];
 				else
-					contentString = [contentString shortStringRepresentationUsingEncoding:[mySQLConnection stringEncoding]];
+					contentString = [contentString shortStringRepresentationUsingEncoding:[postgresConnection stringEncoding]];
 			} else if ([(NSString *)contentString length] > 500) {
 				contentString = [contentString substringToIndex:500];
 			}
@@ -1288,11 +1289,12 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 
 	// Retrieve the column definition
 	NSDictionary *columnDefinition = [[(id <SPDatabaseContentViewDelegate>)[self delegate] dataColumnDefinitions] objectAtIndex:colIndex];
-	NSString *columnType = [columnDefinition objectForKey:@"typegrouping"];
+	id columnType = [columnDefinition objectForKey:@"typegrouping"];
 
 	// If the column is a BLOB or TEXT column, and not an enum, trigger sheet editing
-	BOOL isBlob = ([columnType isEqualToString:@"blobdata"]);
-	if (isBlob && ![columnType isEqualToString:@"enum"]) return YES;
+	BOOL isBlob = ([columnType isKindOfClass:[NSString class]] && [columnType isEqualToString:@"blobdata"]);
+	BOOL isEnum = ([columnType isKindOfClass:[NSString class]] && [columnType isEqualToString:@"enum"]);
+	if (isBlob && !isEnum) return YES;
 
 	// Otherwise, check the cell value for newlines.
 	id cellValue = nil;
@@ -1316,7 +1318,7 @@ NSString *kFieldTypeGroup = @"FIELDGROUP";
 
     //Unpack data to string encoding
 	if ([cellValue isKindOfClass:[NSData class]]) {
-		cellValue = [[NSString alloc] initWithData:cellValue encoding:[mySQLConnection stringEncoding]];
+		cellValue = [[NSString alloc] initWithData:cellValue encoding:[postgresConnection stringEncoding]];
 	}
 
 

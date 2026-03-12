@@ -48,14 +48,15 @@
 #import "SPAppController.h"
 #import "SPSplitView.h"
 #import "SPThreadAdditions.h"
+#import "SPDebugLogger.h"
 #import "SPFunctions.h"
 #import "SPCharsetCollationHelper.h"
 #import "SPConstants.h"
 #import "SPFunctions.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 // New table
 static NSString *SPNewTableName         = @"SPNewTableName";
@@ -73,6 +74,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 - (void)_renameTableOfType:(SPTableType)tableType from:(NSString *)oldTableName to:(NSString *)newTableName;
 - (NSMutableArray *)_allSchemaObjectsOfType:(SPTableType)type;
 - (BOOL)_databaseHasObjectOfType:(SPTableType)type;
+- (void)subscribeToTablePinningNotifications;
 
 @property (readwrite, strong) SQLitePinnedTableManager *_SQLitePinnedTableManager ;
 
@@ -108,8 +110,14 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
 		addTableCharsetHelper = nil; //initialized in awakeFromNib
 		_SQLitePinnedTableManager = SQLitePinnedTableManager.sharedInstance;
+
+		// Initialize schema selection (PostgreSQL)
+		selectedSchema = @"public";
+		availableSchemas = [[NSMutableArray alloc] init];
+		objectsByCategory = [[NSMutableDictionary alloc] init];
+		useCategorialView = NO;
 	}
-	
+
 	return self;
 }
 
@@ -195,11 +203,11 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
     SPLog(@"updateTables, sender: %@", sender);
 
-	SPMySQLResult *theResult;
+    SPPostgresResult *theResult;
 	NSString *previousSelectedTable = nil;
 	NSString *previousFilterString = nil;
 	BOOL previousTableListIsSelectable = tableListIsSelectable;
-	BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
+	BOOL changeEncoding = NO; // PostgreSQL always uses UTF8, no need to change encoding
 
 	if (selectedTableName) previousSelectedTable = [[NSString alloc] initWithString:selectedTableName];
 
@@ -228,90 +236,123 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	if ([tableDocumentInstance database]) {
 
 		// Notify listeners that a query has started
-		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SMySQLQueryWillBePerformed" object:tableDocumentInstance];
+		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPQueryWillBePerformed" object:tableDocumentInstance];
 
 		// Use UTF8 for identifier-based queries
 		if (changeEncoding) {
-			[mySQLConnection storeEncodingForRestoration];
-			[mySQLConnection setEncoding:@"utf8mb4"];
+			[postgresConnection storeEncodingForRestoration];
+			[postgresConnection setEncoding:@"UTF8"];
 		}
 
-		// Select the table list for the current database.  On MySQL versions after 5 this will include
-		// views; on MySQL versions >= 5.0.02 select the "full" list to also select the table type column.
-		if ([prefs boolForKey:SPDisplayCommentsInTablesList]) {
-			theResult = [mySQLConnection queryString:@"SHOW TABLE STATUS"];
-		} else {
-			theResult = [mySQLConnection queryString:@"SHOW FULL TABLES"];
+		// Load available schemas if not already loaded
+		if ([availableSchemas count] == 0) {
+			[self loadSchemas];
 		}
-		[theResult setDefaultRowReturnType:SPMySQLResultRowAsDictionary];
-		[theResult setReturnDataAsStrings:YES]; // TODO: workaround for bug #2700 (#2699)
+
+		// Select the table list for the current database and schema.
+		NSString *schemaToUse = selectedSchema ?: @"public";
+		NSString *query = [NSString stringWithFormat:@"SELECT table_name, table_type, obj_description(('%@.' || quote_ident(table_name))::regclass) as comment FROM information_schema.tables WHERE table_schema = '%@' ORDER BY table_name", schemaToUse, schemaToUse];
+        NSLog(@"SPTablesList: Executing query: %@", query);
+        theResult = [postgresConnection queryString:query];
+        NSLog(@"SPTablesList: Query returned %lu rows, %lu fields", (unsigned long)[theResult numberOfRows], (unsigned long)[theResult numberOfFields]);
+		// [theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		// [theResult setReturnDataAsStrings:YES]; // TODO: workaround for bug #2700 (#2699)
 		if ([theResult numberOfFields] == 1 && [[theResult getRow] isKindOfClass:[NSArray class]]) {
 			for (NSArray *eachRow in theResult) {
 				[tables addObject:[eachRow objectAtIndex:0]];
 				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
 			}
 		} else {
-			for (NSDictionary *eachRow in theResult) {
+            NSUInteger rowIdx = 0;
+			for (id eachRow in theResult) {
+                @try {
+                    NSLog(@"SPTablesList: Row %lu class: %@", (unsigned long)rowIdx, NSStringFromClass([eachRow class]));
+                    
+                    // Safe handling: check if it's a dictionary or array
+                    if (![eachRow isKindOfClass:[NSDictionary class]]) {
+                        NSLog(@"SPTablesList: WARNING - Row is NOT NSDictionary, it's %@", NSStringFromClass([eachRow class]));
+                        if ([eachRow isKindOfClass:[NSArray class]]) {
+                            NSArray *arr = (NSArray *)eachRow;
+                            if ([arr count] > 0) {
+                                [tables addObject:[arr objectAtIndex:0]];
+                                [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
+                            }
+                        }
+                        rowIdx++;
+                        continue;
+                    }
+                    
+                    NSDictionary *dictRow = (NSDictionary *)eachRow;
+                    NSMutableDictionary *mutableRow = [dictRow mutableCopy];
+                    NSString *tableType = [mutableRow objectForKey:@"table_type"];
+                    [mutableRow removeObjectForKey:@"table_type"];
 
-				NSMutableDictionary *mutableRow = [eachRow mutableCopy];
-				NSString *tableType = [mutableRow objectForKey:@"Table_type"];
-				[mutableRow removeObjectForKey:@"Table_type"];
+                    // Due to encoding problems it can be the case that [resultRow objectAtIndex:0]
+                    // return NSNull, thus catch that case for safety reasons
+                    id tableName = [mutableRow objectForKey:@"table_name"];
+                    if (tableName == nil || [tableName isNSNull]) {
+                        tableName = [mutableRow objectForKey:@"NAME"];
+                    }
+                    if ((tableName == nil || [tableName isNSNull]) && mutableRow.allValues.count == 1) {
+                        tableName = [mutableRow.allValues firstObject];
+                    }
+                    if (tableName == nil || [tableName isNSNull]) {
+                        tableName = @"...";
+                    }
+                    NSLog(@"SPTablesList: Found table: %@, type: %@", tableName, tableType);
+                    [tables addObject:tableName];
+                    
+                    // comments is usefull
+                    id tableComment = [mutableRow objectForKey:@"comment"];
+                    if (tableComment == nil || [tableComment isNSNull]) {
+                        tableComment = [mutableRow objectForKey:@"COMMENT"];
+                    }
+                    if (tableComment == nil || [tableComment isNSNull]) {
+                        tableComment = @"";
+                    }
+                    [tableComments setValue:tableComment forKey:tableName];
 
-				// Due to encoding problems it can be the case that [resultRow objectAtIndex:0]
-				// return NSNull, thus catch that case for safety reasons
-				id tableName = [mutableRow objectForKey:@"Name"];
-				if (tableName == nil || [tableName isNSNull]) {
-					tableName = [mutableRow objectForKey:@"NAME"];
-				}
-				if ((tableName == nil || [tableName isNSNull]) && mutableRow.allValues.count == 1) {
-					tableName = [mutableRow.allValues firstObject];
-				}
-				if (tableName == nil || [tableName isNSNull]) {
-					tableName = @"...";
-				}
-				[tables addObject:tableName];
-				
-				// comments is usefull
-				id tableComment = [mutableRow objectForKey:@"Comment"];
-				if (tableComment == nil || [tableComment isNSNull]) {
-					tableComment = [mutableRow objectForKey:@"COMMENT"];
-				}
-				if (tableComment == nil || [tableComment isNSNull]) {
-					tableComment = @"";
-				}
-				[tableComments setValue:tableComment forKey:tableName];
-
-				if ([@"VIEW" isEqualToString:tableComment] || [@"VIEW" isEqualToString:tableType]) {
-					[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeView]];
-					tableListContainsViews = YES;
-				} else {
-					[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
-				}
+                    if ([@"VIEW" isEqualToString:tableComment] || [@"VIEW" isEqualToString:tableType]) {
+                        [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeView]];
+                        tableListContainsViews = YES;
+                    } else {
+                        [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
+                    }
+                } @catch (NSException *ex) {
+                    NSLog(@"SPTablesList: EXCEPTION at row %lu: %@ - %@", (unsigned long)rowIdx, [ex name], [ex reason]);
+                }
+                rowIdx++;
 			}
 		}
+        NSLog(@"SPTablesList: Table enumeration complete, found %lu tables", (unsigned long)[tables count]);
 
 		/* Grab the procedures and functions
 		 *
 		 * Using information_schema gives us more info (for information window perhaps?) but breaks
 		 * backward compatibility with pre 4 I believe. I left the other methods below, in case.
 		 */
-        NSString *pQuery = [NSString stringWithFormat:@"SELECT * FROM information_schema.routines WHERE routine_schema = %@ ORDER BY routine_name", [[tableDocumentInstance database] tickQuotedString]];
-        theResult = [mySQLConnection queryString:pQuery];
-        [theResult setDefaultRowReturnType:SPMySQLResultRowAsArray];
-        [theResult setReturnDataAsStrings:YES]; //see tables above
+		NSString *pQuery = [NSString stringWithFormat:@"SELECT routine_name, routine_type FROM information_schema.routines WHERE routine_schema = '%@' ORDER BY routine_name", schemaToUse];
+        theResult = [postgresConnection queryString:pQuery];
+        // [theResult setDefaultRowReturnType:SPPostgresResultRowAsArray];
+        // [theResult setReturnDataAsStrings:YES]; //see tables above
         
-        // Check for mysql errors - if information_schema is not accessible for some reasons
+        // Check for postgres errors - if information_schema is not accessible for some reasons
         // omit adding procedures and functions
-        if(![mySQLConnection queryErrored] && theResult != nil && [theResult numberOfRows] && [theResult numberOfFields] > 3) {
+        if(![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows] ) {
 
             // Add the header row
             [tables addObject:NSLocalizedString(@"PROCS & FUNCS",@"header for procs & funcs list")];
             [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
 
-            for (NSArray *eachRow in theResult) {
-                [tables addObject:[eachRow safeObjectAtIndex:3]];
-                if([[eachRow safeObjectAtIndex:4] isNSNull] == NO ){
-                    if ([[eachRow safeObjectAtIndex:4] isEqualToString:@"PROCEDURE"]) {
+            for (NSDictionary *eachRow in theResult) {
+                id routineName = [eachRow objectForKey:@"routine_name"];
+                if (routineName && ![routineName isKindOfClass:[NSNull class]]) {
+                    [tables addObject:routineName];
+                } else {
+                    [tables addObject:@"<unknown>"];
+                }
+                if([[eachRow objectForKey:@"routine_type"] isNSNull] == NO ){
+                    if ([[eachRow objectForKey:@"routine_type"] isEqualToString:@"PROCEDURE"]) {
                         [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeProc]];
                     } else {
                         [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeFunc]];
@@ -320,11 +361,91 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
             }
         }
 
+		// Grab sequences for the current schema
+		NSString *seqQuery = [NSString stringWithFormat:@"SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = '%@' ORDER BY sequence_name", schemaToUse];
+		theResult = [postgresConnection queryString:seqQuery];
+
+		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
+			// Add the header row
+			[tables addObject:NSLocalizedString(@"SEQUENCES", @"header for sequences list")];
+			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
+
+			for (NSDictionary *eachRow in theResult) {
+				id seqName = [eachRow objectForKey:@"sequence_name"];
+				if (seqName && ![seqName isKindOfClass:[NSNull class]]) {
+					[tables addObject:seqName];
+				} else {
+					[tables addObject:@"<unknown>"];
+				}
+				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeSequence]];
+			}
+		}
+
+		// Grab materialized views for the current schema
+		NSString *matViewQuery = [NSString stringWithFormat:@"SELECT matviewname FROM pg_matviews WHERE schemaname = '%@' ORDER BY matviewname", schemaToUse];
+		theResult = [postgresConnection queryString:matViewQuery];
+
+		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
+			// Add the header row
+			[tables addObject:NSLocalizedString(@"MATERIALIZED VIEWS", @"header for materialized views list")];
+			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
+
+			for (NSDictionary *eachRow in theResult) {
+				id mvName = [eachRow objectForKey:@"matviewname"];
+				if (mvName && ![mvName isKindOfClass:[NSNull class]]) {
+					[tables addObject:mvName];
+				} else {
+					[tables addObject:@"<unknown>"];
+				}
+				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeMaterializedView]];
+			}
+		}
+
+		// Grab domains for the current schema
+		NSString *domainQuery = [NSString stringWithFormat:@"SELECT domain_name FROM information_schema.domains WHERE domain_schema = '%@' ORDER BY domain_name", schemaToUse];
+		theResult = [postgresConnection queryString:domainQuery];
+
+		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
+			// Add the header row
+			[tables addObject:NSLocalizedString(@"DOMAINS", @"header for domains list")];
+			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
+
+			for (NSDictionary *eachRow in theResult) {
+				id domName = [eachRow objectForKey:@"domain_name"];
+				if (domName && ![domName isKindOfClass:[NSNull class]]) {
+					[tables addObject:domName];
+				} else {
+					[tables addObject:@"<unknown>"];
+				}
+				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeDomain]];
+			}
+		}
+
+		// Grab custom types for the current schema
+		NSString *typeQuery = [NSString stringWithFormat:@"SELECT t.typname FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid WHERE n.nspname = '%@' AND t.typtype IN ('c', 'e') ORDER BY t.typname", schemaToUse];
+		theResult = [postgresConnection queryString:typeQuery];
+
+		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
+			// Add the header row
+			[tables addObject:NSLocalizedString(@"TYPES", @"header for types list")];
+			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
+
+			for (NSDictionary *eachRow in theResult) {
+				id typeName = [eachRow objectForKey:@"typname"];
+				if (typeName && ![typeName isKindOfClass:[NSNull class]]) {
+					[tables addObject:typeName];
+				} else {
+					[tables addObject:@"<unknown>"];
+				}
+				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeType]];
+			}
+		}
+
 		// Restore encoding if appropriate
-		if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+		if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
 		// Notify listeners that the query has finished
-		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SMySQLQueryHasBeenPerformed" object:tableDocumentInstance];
+		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPQueryHasBeenPerformed" object:tableDocumentInstance];
 	}
 
 	// Add the table headers even if no tables were found
@@ -666,7 +787,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	[[chooseDatabaseButton menu] addItemWithTitle:NSLocalizedString(@"Refresh Databases", @"menu item to refresh databases") action:@selector(setDatabases:) keyEquivalent:@""];
 	[[chooseDatabaseButton menu] addItem:[NSMenuItem separatorItem]];
 
-	NSArray *theDatabaseList = [mySQLConnection databases];
+	NSArray *theDatabaseList = [postgresConnection databases];
 
 	NSMutableArray *allDatabases = [[NSMutableArray alloc] initWithCapacity:[theDatabaseList count]];
 
@@ -683,7 +804,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
 	[chooseDatabaseButton itemAtIndex:1].enabled = YES;
 
-	(![mySQLConnection database]) ? [chooseDatabaseButton selectItemAtIndex:0] : [chooseDatabaseButton selectItemWithTitle:[mySQLConnection database]];
+	(![postgresConnection database]) ? [chooseDatabaseButton selectItemAtIndex:0] : [chooseDatabaseButton selectItemWithTitle:[postgresConnection database]];
 }
 /**
  * This action starts editing the table name in the table list
@@ -737,8 +858,8 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 		return;
 	}
   
-  NSString *databaseName = [mySQLConnection database];
-  NSString *hostName = [mySQLConnection host];
+  NSString *databaseName = [postgresConnection database];
+  NSString *hostName = [postgresConnection host];
   
   NSMutableArray *selectedTables = [NSMutableArray array];
   BOOL isPinned = NO;
@@ -770,7 +891,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
         return;
     }
 
-    NSString *databaseName = [mySQLConnection database];
+    NSString *databaseName = [postgresConnection database];
 
     NSString *copiedSyntax =[NSString stringWithFormat:@"%@.%@", databaseName, selectedTableName];
     if ([copiedSyntax length] > 0) {
@@ -838,9 +959,9 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 /**
  * Sets the connection (received from SPDatabaseDocument) and makes things that have to be done only once
  */
-- (void)setConnection:(SPMySQLConnection *)theConnection
+- (void)setConnection:(SPPostgresConnection *)theConnection
 {
-	mySQLConnection = theConnection;
+	postgresConnection = theConnection;
 	
 	[self updateTables:self];
 }
@@ -1277,6 +1398,172 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 		[copyCreateSyntaxContextMenuItem setHidden:NO];
 		[copyCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Copy Create Function Syntax",@"Table List : Context Menu : copy CREATE FUNCTION syntax")];
 	}
+	// Handle Sequence type
+	else if (selectedTableType == SPTableTypeSequence) {
+		[[tableSubMenu itemAtIndex:4] setTitle:NSLocalizedString(@"Copy Create Sequence Syntax", @"copy create sequence syntax menu item")];
+		[[tableSubMenu itemAtIndex:5] setTitle:NSLocalizedString(@"Show Create Sequence Syntax...", @"show create sequence syntax menu item")];
+		[[tableSubMenu itemAtIndex:6] setHidden:YES];
+		[[tableSubMenu itemAtIndex:7] setHidden:YES];
+		[[tableSubMenu itemAtIndex:8] setHidden:YES];
+		[[tableSubMenu itemAtIndex:9] setHidden:YES];
+		[[tableSubMenu itemAtIndex:10] setHidden:YES];
+		[[tableSubMenu itemAtIndex:11] setHidden:YES];
+		[[tableSubMenu itemAtIndex:12] setHidden:YES];
+		[[tableSubMenu itemAtIndex:13] setHidden:YES];
+
+		[renameTableMenuItem setHidden:NO];
+		[renameTableMenuItem setTitle:NSLocalizedString(@"Rename Sequence...", @"rename sequence menu title")];
+		[duplicateTableMenuItem setHidden:YES];
+		[truncateTableButton setHidden:YES];
+		[removeTableMenuItem setTitle:NSLocalizedString(@"Delete Sequence", @"delete sequence menu title")];
+		[openTableInNewTabMenuItem setHidden:YES];
+		[openTableInNewWindowMenuItem setHidden:YES];
+		[separatorTableMenuItem3 setHidden:YES];
+		[pinTableMenuItem setHidden:YES];
+		[showCreateSyntaxMenuItem setHidden:NO];
+		[showCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Show Create Sequence Syntax...", @"show create sequence syntax menu item")];
+		[copyCreateSyntaxMenuItem setHidden:NO];
+		[copyCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Copy Create Sequence Syntax",@"Table List : Gear Menu : Copy CREATE SEQUENCE syntax")];
+
+		[renameTableContextMenuItem setHidden:NO];
+		[renameTableContextMenuItem setTitle:NSLocalizedString(@"Rename Sequence...", @"rename sequence menu title")];
+		[duplicateTableContextMenuItem setHidden:YES];
+		[truncateTableContextMenuItem setHidden:YES];
+		[removeTableContextMenuItem setTitle:NSLocalizedString(@"Delete Sequence", @"delete sequence menu title")];
+		[openTableInNewTabContextMenuItem setHidden:YES];
+		[openTableInNewWindowContextMenuItem setHidden:YES];
+		[separatorTableContextMenuItem3 setHidden:YES];
+		[pinTableContextMenuItem setHidden:YES];
+		[copyTableNameContextMenuItem setHidden:NO];
+		[copyTableNameContextMenuItem setTitle:NSLocalizedString(@"Copy Sequence Name",@"Table List : Context Menu : copy sequence name")];
+		[showCreateSyntaxContextMenuItem setHidden:NO];
+		[showCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Show Create Sequence Syntax...", @"show create sequence syntax menu item")];
+		[copyCreateSyntaxContextMenuItem setHidden:NO];
+		[copyCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Copy Create Sequence Syntax",@"Table List : Context Menu : copy CREATE SEQUENCE syntax")];
+	}
+	// Handle Materialized View type
+	else if (selectedTableType == SPTableTypeMaterializedView) {
+		[[tableSubMenu itemAtIndex:4] setTitle:NSLocalizedString(@"Copy Create Materialized View Syntax", @"copy create materialized view syntax menu item")];
+		[[tableSubMenu itemAtIndex:5] setTitle:NSLocalizedString(@"Show Create Materialized View Syntax...", @"show create materialized view syntax menu item")];
+		[[tableSubMenu itemAtIndex:6] setHidden:YES];
+		[[tableSubMenu itemAtIndex:7] setHidden:YES];
+		[[tableSubMenu itemAtIndex:8] setHidden:YES];
+		[[tableSubMenu itemAtIndex:9] setHidden:YES];
+		[[tableSubMenu itemAtIndex:10] setHidden:YES];
+		[[tableSubMenu itemAtIndex:11] setHidden:YES];
+		[[tableSubMenu itemAtIndex:12] setHidden:NO];
+		[[tableSubMenu itemAtIndex:12] setTitle:NSLocalizedString(@"Refresh Materialized View", @"refresh materialized view menu item")];
+		[[tableSubMenu itemAtIndex:13] setHidden:YES];
+
+		[renameTableMenuItem setHidden:NO];
+		[renameTableMenuItem setTitle:NSLocalizedString(@"Rename Materialized View...", @"rename materialized view menu title")];
+		[duplicateTableMenuItem setHidden:YES];
+		[truncateTableButton setHidden:YES];
+		[removeTableMenuItem setTitle:NSLocalizedString(@"Delete Materialized View", @"delete materialized view menu title")];
+		[openTableInNewTabMenuItem setHidden:NO];
+		[openTableInNewWindowMenuItem setHidden:NO];
+		[openTableInNewTabMenuItem setTitle:NSLocalizedString(@"Open Materialized View in New Tab", @"open materialized view in new tab title")];
+		[openTableInNewWindowMenuItem setTitle:NSLocalizedString(@"Open Materialized View in New Window", @"Table List : Gear Menu : Duplicate connection to new window")];
+		NSString *pinMVLocalizedString = NSLocalizedString(isCurrentSelectionPinned ? @"Unpin Materialized View" : @"Pin Materialized View", @"pin materialized view menu item title");
+		[pinTableMenuItem setHidden:NO];
+		[pinTableMenuItem setTitle:pinMVLocalizedString];
+		[separatorTableMenuItem3 setHidden:NO];
+		[showCreateSyntaxMenuItem setHidden:NO];
+		[showCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Show Create Materialized View Syntax...", @"show create materialized view syntax menu item")];
+		[copyCreateSyntaxMenuItem setHidden:NO];
+		[copyCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Copy Create Materialized View Syntax",@"Table List : Gear Menu : Copy CREATE MATERIALIZED VIEW syntax")];
+
+		[renameTableContextMenuItem setHidden:NO];
+		[renameTableContextMenuItem setTitle:NSLocalizedString(@"Rename Materialized View...", @"rename materialized view menu title")];
+		[duplicateTableContextMenuItem setHidden:YES];
+		[truncateTableContextMenuItem setHidden:YES];
+		[removeTableContextMenuItem setTitle:NSLocalizedString(@"Delete Materialized View", @"delete materialized view menu title")];
+		[openTableInNewTabContextMenuItem setHidden:NO];
+		[openTableInNewWindowContextMenuItem setHidden:NO];
+		[separatorTableContextMenuItem3 setHidden:NO];
+		[openTableInNewTabContextMenuItem setTitle:NSLocalizedString(@"Open Materialized View in New Tab", @"open materialized view in new tab title")];
+		[openTableInNewWindowContextMenuItem setTitle:NSLocalizedString(@"Open Materialized View in New Window", @"Table List : Context Menu : Duplicate connection to new window")];
+		[pinTableContextMenuItem setHidden:NO];
+		[pinTableContextMenuItem setTitle:pinMVLocalizedString];
+		[copyTableNameContextMenuItem setHidden:NO];
+		[copyTableNameContextMenuItem setTitle:NSLocalizedString(@"Copy Materialized View Name",@"Table List : Context Menu : copy materialized view name")];
+		[showCreateSyntaxContextMenuItem setHidden:NO];
+		[showCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Show Create Materialized View Syntax...", @"show create materialized view syntax menu item")];
+		[copyCreateSyntaxContextMenuItem setHidden:NO];
+		[copyCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Copy Create Materialized View Syntax",@"Table List : Context Menu : copy CREATE MATERIALIZED VIEW syntax")];
+	}
+	// Handle Domain type
+	else if (selectedTableType == SPTableTypeDomain) {
+		[[tableSubMenu itemAtIndex:4] setTitle:NSLocalizedString(@"Copy Create Domain Syntax", @"copy create domain syntax menu item")];
+		[[tableSubMenu itemAtIndex:5] setTitle:NSLocalizedString(@"Show Create Domain Syntax...", @"show create domain syntax menu item")];
+		for (int i = 6; i <= 13; i++) {
+			[[tableSubMenu itemAtIndex:i] setHidden:YES];
+		}
+
+		[renameTableMenuItem setHidden:YES];
+		[duplicateTableMenuItem setHidden:YES];
+		[truncateTableButton setHidden:YES];
+		[removeTableMenuItem setTitle:NSLocalizedString(@"Delete Domain", @"delete domain menu title")];
+		[openTableInNewTabMenuItem setHidden:YES];
+		[openTableInNewWindowMenuItem setHidden:YES];
+		[separatorTableMenuItem3 setHidden:YES];
+		[pinTableMenuItem setHidden:YES];
+		[showCreateSyntaxMenuItem setHidden:NO];
+		[showCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Show Create Domain Syntax...", @"show create domain syntax menu item")];
+		[copyCreateSyntaxMenuItem setHidden:NO];
+		[copyCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Copy Create Domain Syntax",@"Table List : Gear Menu : Copy CREATE DOMAIN syntax")];
+
+		[renameTableContextMenuItem setHidden:YES];
+		[duplicateTableContextMenuItem setHidden:YES];
+		[truncateTableContextMenuItem setHidden:YES];
+		[removeTableContextMenuItem setTitle:NSLocalizedString(@"Delete Domain", @"delete domain menu title")];
+		[openTableInNewTabContextMenuItem setHidden:YES];
+		[openTableInNewWindowContextMenuItem setHidden:YES];
+		[separatorTableContextMenuItem3 setHidden:YES];
+		[pinTableContextMenuItem setHidden:YES];
+		[copyTableNameContextMenuItem setHidden:NO];
+		[copyTableNameContextMenuItem setTitle:NSLocalizedString(@"Copy Domain Name",@"Table List : Context Menu : copy domain name")];
+		[showCreateSyntaxContextMenuItem setHidden:NO];
+		[showCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Show Create Domain Syntax...", @"show create domain syntax menu item")];
+		[copyCreateSyntaxContextMenuItem setHidden:NO];
+		[copyCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Copy Create Domain Syntax",@"Table List : Context Menu : copy CREATE DOMAIN syntax")];
+	}
+	// Handle Type
+	else if (selectedTableType == SPTableTypeType) {
+		[[tableSubMenu itemAtIndex:4] setTitle:NSLocalizedString(@"Copy Create Type Syntax", @"copy create type syntax menu item")];
+		[[tableSubMenu itemAtIndex:5] setTitle:NSLocalizedString(@"Show Create Type Syntax...", @"show create type syntax menu item")];
+		for (int i = 6; i <= 13; i++) {
+			[[tableSubMenu itemAtIndex:i] setHidden:YES];
+		}
+
+		[renameTableMenuItem setHidden:YES];
+		[duplicateTableMenuItem setHidden:YES];
+		[truncateTableButton setHidden:YES];
+		[removeTableMenuItem setTitle:NSLocalizedString(@"Delete Type", @"delete type menu title")];
+		[openTableInNewTabMenuItem setHidden:YES];
+		[openTableInNewWindowMenuItem setHidden:YES];
+		[separatorTableMenuItem3 setHidden:YES];
+		[pinTableMenuItem setHidden:YES];
+		[showCreateSyntaxMenuItem setHidden:NO];
+		[showCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Show Create Type Syntax...", @"show create type syntax menu item")];
+		[copyCreateSyntaxMenuItem setHidden:NO];
+		[copyCreateSyntaxMenuItem setTitle:NSLocalizedString(@"Copy Create Type Syntax",@"Table List : Gear Menu : Copy CREATE TYPE syntax")];
+
+		[renameTableContextMenuItem setHidden:YES];
+		[duplicateTableContextMenuItem setHidden:YES];
+		[truncateTableContextMenuItem setHidden:YES];
+		[removeTableContextMenuItem setTitle:NSLocalizedString(@"Delete Type", @"delete type menu title")];
+		[openTableInNewTabContextMenuItem setHidden:YES];
+		[openTableInNewWindowContextMenuItem setHidden:YES];
+		[separatorTableContextMenuItem3 setHidden:YES];
+		[pinTableContextMenuItem setHidden:YES];
+		[copyTableNameContextMenuItem setHidden:NO];
+		[copyTableNameContextMenuItem setTitle:NSLocalizedString(@"Copy Type Name",@"Table List : Context Menu : copy type name")];
+		[showCreateSyntaxContextMenuItem setHidden:NO];
+		[showCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Show Create Type Syntax...", @"show create type syntax menu item")];
+		[copyCreateSyntaxContextMenuItem setHidden:NO];
+		[copyCreateSyntaxContextMenuItem setTitle:NSLocalizedString(@"Copy Create Type Syntax",@"Table List : Context Menu : copy CREATE TYPE syntax")];
+	}
 }
 
 - (void)deselectAllTables
@@ -1489,7 +1776,131 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
  */
 - (BOOL)hasNonTableObjects
 {
-	return [self hasViews] || [self hasProcedures] || [self hasFunctions] || [self hasEvents];
+	return [self hasViews] || [self hasProcedures] || [self hasFunctions] || [self hasEvents] ||
+		   [self hasSequences] || [self hasMaterializedViews] || [self hasForeignTables];
+}
+
+#pragma mark -
+#pragma mark PostgreSQL-specific getters
+
+/**
+ * Returns whether or not the current database has any sequences.
+ */
+- (BOOL)hasSequences
+{
+	return [self _databaseHasObjectOfType:SPTableTypeSequence];
+}
+
+/**
+ * Returns whether or not the current database has any materialized views.
+ */
+- (BOOL)hasMaterializedViews
+{
+	return [self _databaseHasObjectOfType:SPTableTypeMaterializedView];
+}
+
+/**
+ * Returns whether or not the current database has any foreign tables.
+ */
+- (BOOL)hasForeignTables
+{
+	return [self _databaseHasObjectOfType:SPTableTypeForeignTable];
+}
+
+/**
+ * Returns whether or not the current database has any domains.
+ */
+- (BOOL)hasDomains
+{
+	return [self _databaseHasObjectOfType:SPTableTypeDomain];
+}
+
+/**
+ * Returns whether or not the current database has any custom types.
+ */
+- (BOOL)hasTypes
+{
+	return [self _databaseHasObjectOfType:SPTableTypeType];
+}
+
+/**
+ * Returns whether or not the current database has any aggregates.
+ */
+- (BOOL)hasAggregates
+{
+	return [self _databaseHasObjectOfType:SPTableTypeAggregate];
+}
+
+/**
+ * Returns whether or not the current database has any operators.
+ */
+- (BOOL)hasOperators
+{
+	return [self _databaseHasObjectOfType:SPTableTypeOperator];
+}
+
+/**
+ * Returns whether or not the current database has any FTS configurations.
+ */
+- (BOOL)hasFTSConfigurations
+{
+	return [self _databaseHasObjectOfType:SPTableTypeFTSConfiguration];
+}
+
+/**
+ * Returns an array of all sequence names.
+ */
+- (NSArray *)allSequenceNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeSequence];
+}
+
+/**
+ * Returns an array of all materialized view names.
+ */
+- (NSArray *)allMaterializedViewNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeMaterializedView];
+}
+
+/**
+ * Returns an array of all foreign table names.
+ */
+- (NSArray *)allForeignTableNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeForeignTable];
+}
+
+/**
+ * Returns an array of all domain names.
+ */
+- (NSArray *)allDomainNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeDomain];
+}
+
+/**
+ * Returns an array of all type names.
+ */
+- (NSArray *)allTypeNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeType];
+}
+
+/**
+ * Returns an array of all aggregate names.
+ */
+- (NSArray *)allAggregateNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeAggregate];
+}
+
+/**
+ * Returns an array of all trigger function names.
+ */
+- (NSArray *)allTriggerFunctionNames
+{
+	return [self _allSchemaObjectsOfType:SPTableTypeTriggerFunction];
 }
 
 #pragma mark -
@@ -1865,7 +2276,9 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	
 	selectedTableName = [[NSString alloc] initWithString:newName];
 	selectedTableType = newType;
-	
+
+	[SPDebugLogger log:@"[STEP 1] Table selected: %@, type: %ld", selectedTableName, (long)selectedTableType];
+
 	[tableDocumentInstance loadTable:selectedTableName ofType:selectedTableType];
 
 	if ([[SPNavigatorController sharedNavigatorController] syncMode]) {
@@ -2003,9 +2416,9 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 		NSString *query = [pboard stringForType:SPNavigatorTableDataPasteboardDragType];
 		if(!query) return NO;
 
-		[mySQLConnection queryString:query];
-		if ([mySQLConnection queryErrored]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error while importing table", @"error while importing table message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to import a table via: \n%@\n\n\nMySQL said: %@", @"error importing table informative message"), query, [mySQLConnection lastErrorMessage]] callback:nil];
+		[postgresConnection queryString:query];
+		if ([postgresConnection queryErrored]) {
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error while importing table", @"error while importing table message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to import a table via: \n%@\n\n\nPostgreSQL said: %@", @"error importing table informative message"), query, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 			return NO;
 		}
 		[self updateTables:nil];
@@ -2116,8 +2529,8 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
  * Doesn't reload the UI
  */
 - (void)initPinnedTables {
-    NSString * hostName = [mySQLConnection host];
-    NSString * databaseName = [mySQLConnection database];
+    NSString * hostName = [postgresConnection host];
+    NSString * databaseName = [postgresConnection database];
     NSArray *tablesToPin = [_SQLitePinnedTableManager getPinnedTablesWithHostName:hostName databaseName:databaseName];
     if (tablesToPin.count > 0) {
         [tables insertObject:NSLocalizedString(@"PINNED", @"header for pinned tables") atIndex:0];
@@ -2139,8 +2552,8 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
 - (void)handlePinnedTableRenameFrom: (NSString*) originalTableName To: (NSString*) newTableName {
 
-    NSString *databaseName = [mySQLConnection database];
-    NSString *hostName = [mySQLConnection host];
+    NSString *databaseName = [postgresConnection database];
+    NSString *hostName = [postgresConnection host];
 
     if ([pinnedTables containsObject:originalTableName]) {
         [_SQLitePinnedTableManager unpinTableWithHostName:hostName databaseName:databaseName tableToUnpin:originalTableName];
@@ -2154,8 +2567,8 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
 - (void)unpinDeletedTableIfPinned: (NSString*) tableName {
 
-    NSString *databaseName = [mySQLConnection database];
-    NSString *hostName = [mySQLConnection host];
+    NSString *databaseName = [postgresConnection database];
+    NSString *hostName = [postgresConnection host];
 
     if ([pinnedTables containsObject:tableName]) {
         [_SQLitePinnedTableManager unpinTableWithHostName:hostName databaseName:databaseName tableToUnpin:tableName];
@@ -2167,8 +2580,8 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
 - (void)subscribeToTablePinningNotifications {
     
-    NSString * hostName = [mySQLConnection host];
-    NSString * databaseName = [mySQLConnection database];
+    NSString * hostName = [postgresConnection host];
+    NSString * databaseName = [postgresConnection database];
     
     // remove observer for previous hostname+database on database selection change by user
     if (pinnedTableNotificationName != nil) {
@@ -2367,6 +2780,146 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 }
 
 #pragma mark -
+#pragma mark Schema management (PostgreSQL)
+
+/**
+ * Loads all available schemas for the current database.
+ */
+- (void)loadSchemas
+{
+	if (!postgresConnection || ![tableDocumentInstance database]) {
+		return;
+	}
+
+	[availableSchemas removeAllObjects];
+
+	// Query PostgreSQL for all schemas, excluding system schemas
+	NSString *query = @"SELECT nspname FROM pg_namespace "
+					   "WHERE nspname NOT LIKE 'pg_%' "
+					   "AND nspname != 'information_schema' "
+					   "ORDER BY nspname";
+
+	SPPostgresResult *result = [postgresConnection queryString:query];
+
+	if (![postgresConnection queryErrored] && result) {
+		for (NSDictionary *row in result) {
+			NSString *schemaName = [row objectForKey:@"nspname"];
+			if (schemaName && ![schemaName isKindOfClass:[NSNull class]]) {
+				[availableSchemas addObject:schemaName];
+			}
+		}
+	}
+
+	// Ensure 'public' is always available and at the top
+	if (![availableSchemas containsObject:@"public"]) {
+		[availableSchemas insertObject:@"public" atIndex:0];
+	} else {
+		[availableSchemas removeObject:@"public"];
+		[availableSchemas insertObject:@"public" atIndex:0];
+	}
+
+	// Update the schema popup button if it exists
+	if (schemaPopUpButton) {
+		SPMainQSync(^{
+			[self->schemaPopUpButton removeAllItems];
+			for (NSString *schema in self->availableSchemas) {
+				[self->schemaPopUpButton addItemWithTitle:schema];
+			}
+			// Select the current schema
+			if (self->selectedSchema && [self->availableSchemas containsObject:self->selectedSchema]) {
+				[self->schemaPopUpButton selectItemWithTitle:self->selectedSchema];
+			} else {
+				[self->schemaPopUpButton selectItemAtIndex:0];
+				self->selectedSchema = @"public";
+			}
+		});
+	}
+}
+
+/**
+ * Called when the schema popup selection changes.
+ */
+- (IBAction)schemaChanged:(id)sender
+{
+	NSString *newSchema = [[schemaPopUpButton selectedItem] title];
+	if (newSchema && ![newSchema isEqualToString:selectedSchema]) {
+		[self setSelectedSchema:newSchema];
+		[self refreshObjectsForSchema:newSchema];
+		[self updateTables:self];
+	}
+}
+
+/**
+ * Refreshes all objects for the specified schema.
+ */
+- (void)refreshObjectsForSchema:(NSString *)schema
+{
+	if (!schema) {
+		schema = @"public";
+	}
+
+	selectedSchema = [schema copy];
+
+	// Clear and reload the objects by category
+	[objectsByCategory removeAllObjects];
+
+	// The actual loading is done in updateTables: which will use the selectedSchema
+	SPLog(@"Refreshing objects for schema: %@", schema);
+}
+
+/**
+ * Returns the currently selected schema.
+ */
+- (NSString *)selectedSchema
+{
+	return selectedSchema ?: @"public";
+}
+
+/**
+ * Sets the selected schema.
+ */
+- (void)setSelectedSchema:(NSString *)schema
+{
+	selectedSchema = schema ? [schema copy] : @"public";
+}
+
+/**
+ * Returns the list of available schemas.
+ */
+- (NSArray *)availableSchemas
+{
+	return [NSArray arrayWithArray:availableSchemas];
+}
+
+#pragma mark -
+#pragma mark Categorized view management
+
+/**
+ * Enables or disables the categorized view mode.
+ */
+- (void)setUseCategorialView:(BOOL)useCategorized
+{
+	useCategorialView = useCategorized;
+	[self updateTables:self];
+}
+
+/**
+ * Returns whether the categorized view mode is enabled.
+ */
+- (BOOL)useCategorialView
+{
+	return useCategorialView;
+}
+
+/**
+ * Returns the objects organized by category.
+ */
+- (NSDictionary *)objectsByCategory
+{
+	return [NSDictionary dictionaryWithDictionary:objectsByCategory];
+}
+
+#pragma mark -
 #pragma mark Private API
 
 /**
@@ -2381,33 +2934,49 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	// Get last index
 	NSUInteger currentIndex = [indexes lastIndex];
 	
-	if (force) {
-		[mySQLConnection queryString:@"SET FOREIGN_KEY_CHECKS = 0"];
-	}
+		// [postgresConnection queryString:@"SET FOREIGN_KEY_CHECKS = 0"]; // Not supported in Postgres, use CASCADE in DROP
 
 	while (currentIndex != NSNotFound) {
 		NSString *objectIdentifier = @"";
         NSString *databaseObjectName = [filteredTables objectAtIndex:currentIndex];
-		NSString *databaseObject = [databaseObjectName backtickQuotedString];
+		NSString *databaseObject = [databaseObjectName postgresQuotedIdentifier];
 		NSInteger objectType = [[filteredTableTypes objectAtIndex:currentIndex] integerValue];
 		
 		if (objectType == SPTableTypeView) {
 			objectIdentifier = @"VIEW";
-		} 
+		}
 		else if (objectType == SPTableTypeTable) {
 			objectIdentifier = @"TABLE";
 		}
 		else if (objectType == SPTableTypeProc) {
 			objectIdentifier = @"PROCEDURE";
-		} 
+		}
 		else if (objectType == SPTableTypeFunc) {
 			objectIdentifier = @"FUNCTION";
 		}
-		
-		[mySQLConnection queryString:[NSString stringWithFormat:@"DROP %@ %@", objectIdentifier, databaseObject]];
+		else if (objectType == SPTableTypeSequence) {
+			objectIdentifier = @"SEQUENCE";
+		}
+		else if (objectType == SPTableTypeMaterializedView) {
+			objectIdentifier = @"MATERIALIZED VIEW";
+		}
+		else if (objectType == SPTableTypeDomain) {
+			objectIdentifier = @"DOMAIN";
+		}
+		else if (objectType == SPTableTypeType) {
+			objectIdentifier = @"TYPE";
+		}
+		else if (objectType == SPTableTypeAggregate) {
+			objectIdentifier = @"AGGREGATE";
+		}
+		else if (objectType == SPTableTypeTriggerFunction) {
+			objectIdentifier = @"FUNCTION";
+		}
+
+		[postgresConnection queryString:[NSString stringWithFormat:@"DROP %@ %@ %@", objectIdentifier, databaseObject, force ? @"CASCADE" : @""]];
 
 		// If no error is recorded, the table was successfully dropped - remove it from the list
-		if (![mySQLConnection queryErrored]) {
+		if (![postgresConnection queryErrored]) {
 			
 			// Dropped table with success
 			if (isTableListFiltered) {
@@ -2434,16 +3003,16 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 				[alert addButtonWithTitle:NSLocalizedString(@"Stop", @"stop button")];
 			}
 			
-			NSString *databaseError = [mySQLConnection lastErrorMessage];
-			NSString *userMessage = NSLocalizedString(@"Couldn't delete '%@'.\n\nMySQL said: %@", @"message of panel when an item cannot be deleted");
+			NSString *databaseError = [postgresConnection lastErrorMessage];
+			NSString *userMessage = NSLocalizedString(@"Couldn't delete '%@'.\n\nPostgreSQL said: %@", @"message of panel when an item cannot be deleted");
 			
 			// Try to provide a more helpful message
 			if ([databaseError rangeOfString:@"a foreign key constraint fails" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-				userMessage = NSLocalizedString(@"Couldn't delete '%@'.\n\nSelecting the 'Force delete' option may prevent this issue, but may leave the database in an inconsistent state.\n\nMySQL said: %@", @"message of panel when an item cannot be deleted including informative message about using force deletion");
+				userMessage = NSLocalizedString(@"Couldn't delete '%@'.\n\nSelecting the 'Force delete' option may prevent this issue, but may leave the database in an inconsistent state.\n\nPostgreSQL said: %@", @"message of panel when an item cannot be deleted including informative message about using force deletion");
 			}
 			
 			[alert setMessageText:NSLocalizedString(@"Error", @"error")];
-			[alert setInformativeText:[NSString stringWithFormat:userMessage, [filteredTables objectAtIndex:currentIndex], [mySQLConnection lastErrorMessage]]];
+			[alert setInformativeText:[NSString stringWithFormat:userMessage, [filteredTables objectAtIndex:currentIndex], [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")]];
 			[alert setAlertStyle:NSAlertStyleWarning];
 			
 			if ([indexes indexLessThanIndex:currentIndex] == NSNotFound) {
@@ -2459,9 +3028,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
         [self unpinDeletedTableIfPinned:databaseObjectName];
 	}
 	
-	if (force) {
-		[mySQLConnection queryString:@"SET FOREIGN_KEY_CHECKS = 1"];
-	}
+		// [postgresConnection queryString:@"SET FOREIGN_KEY_CHECKS = 1"];
 
     [self updateTables:self]; // do full refresh
 
@@ -2479,11 +3046,11 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	NSIndexSet *indexes = [tablesListView selectedRowIndexes];
 
 	[indexes enumerateIndexesWithOptions:NSEnumerationReverse usingBlock:^(NSUInteger currentIndex, BOOL * _Nonnull stop) {
-		[mySQLConnection queryString:[NSString stringWithFormat: @"TRUNCATE TABLE %@", [[filteredTables objectAtIndex:currentIndex] backtickQuotedString]]];
+		[postgresConnection queryString:[NSString stringWithFormat: @"TRUNCATE TABLE %@ CASCADE", [[filteredTables objectAtIndex:currentIndex] postgresQuotedIdentifier]]];
 
 		// Couldn't truncate table
-		if ([mySQLConnection queryErrored]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error truncating table", @"error truncating table message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to truncate the table '%@'.\n\nMySQL said: %@", @"error truncating table informative message"), [filteredTables objectAtIndex:currentIndex], [mySQLConnection lastErrorMessage]] callback:nil];
+		if ([postgresConnection queryErrored]) {
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error truncating table", @"error truncating table message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to truncate the table '%@'.\n\nPostgreSQL said: %@", @"error truncating table informative message"), [filteredTables objectAtIndex:currentIndex], [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 			*stop = YES;
 		}
 
@@ -2541,42 +3108,15 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 {
 	@autoreleasepool
 	{
-		NSString *charSetStatement   = @"";
-		NSString *collationStatement = @"";
-		NSString *engineStatement    = @"";
-
-		NSString *tableName = [tableDetails objectForKey:SPNewTableName];
-		NSString *tableType = [tableDetails objectForKey:SPNewTableType];
-
-		// Ensure the use of UTF8 when creating new tables
-		BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
-
-		if (changeEncoding) {
-			[mySQLConnection storeEncodingForRestoration];
-			[mySQLConnection setEncoding:@"utf8mb4"];
-		}
-
-		// If there is an encoding selected other than the default we must specify it in CREATE TABLE statement
-		NSString *encodingName = [tableDetails objectForKey:SPNewTableCharacterSet];
-
-		if (encodingName) charSetStatement = [NSString stringWithFormat:@"DEFAULT CHARACTER SET %@", [encodingName backtickQuotedString]];
-
-		// If there is a collation selected other than the default we must specify it in the CREATE TABLE statement
-		NSString *collationName = [tableDetails objectForKey:SPNewTableCollation];
-
-		if (collationName) collationStatement = [NSString stringWithFormat:@"DEFAULT COLLATE %@", [collationName backtickQuotedString]];
-
-		// If there is a type selected other than the default we must specify it in CREATE TABLE statement
-		if (tableType) {
-			engineStatement = [NSString stringWithFormat:@"ENGINE = %@", [tableType backtickQuotedString]];
-		}
-
-		NSString *createStatement = [NSString stringWithFormat:@"CREATE TABLE %@ (id INT(11) UNSIGNED NOT NULL%@) %@ %@ %@", [tableName backtickQuotedString], [tableType isEqualToString:@"CSV"] ? @"" : @" PRIMARY KEY AUTO_INCREMENT", charSetStatement, collationStatement, engineStatement];
+		NSString *tableName = [tableDetails objectForKey:@"name"];
+		
+		// Postgres simple create table
+		NSString *createStatement = [NSString stringWithFormat:@"CREATE TABLE %@ (id SERIAL PRIMARY KEY)", [tableName postgresQuotedIdentifier]];
 
 		// Create the table
-		[mySQLConnection queryString:createStatement];
+		[postgresConnection queryString:createStatement];
 
-		if (![mySQLConnection queryErrored]) {
+		if (![postgresConnection queryErrored]) {
 
 			// Table creation was successful - insert the new item into the tables list and select it.
 			NSInteger addItemAtIndex = NSNotFound;
@@ -2630,10 +3170,10 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 			// Error while creating new table
 
 			SPMainQSync(^{
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error adding new table", @"error adding new table message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to add the new table '%@'.\n\nMySQL said: %@", @"error adding new table informative message"), tableName, [self->mySQLConnection lastErrorMessage]] callback:nil];
+				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error adding new table", @"error adding new table message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to add the new table '%@'.\n\nPostgreSQL said: %@", @"error adding new table informative message"), tableName, [self->postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 			});
-
-			if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+			
+			// PostgreSQL always uses UTF8, no encoding restoration needed
 
 			[[tablesListView onMainThread] reloadData];
 		}
@@ -2660,7 +3200,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 
 	BOOL moveToDifferentDB = NO;
 
-	if (![targetDatabaseName isEqualToString:mySQLConnection.database]){
+	if (![targetDatabaseName isEqualToString:postgresConnection.database]){
 		moveToDifferentDB = YES;
 		tempTableName = [NSString stringWithNewUUID];
 	}
@@ -2691,16 +3231,21 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	}
 
 	// Get table/view structure
-	SPMySQLResult *queryResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW CREATE %@ %@",
-												[tableType uppercaseString],
-												[[filteredTables objectAtIndex:[tablesListView selectedRow]] backtickQuotedString]
-												]];
+	SPPostgresResult *queryResult;
+    if (tblType == SPTableTypeView) {
+        queryResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT pg_get_viewdef(%@, true)", [[filteredTables objectAtIndex:[tablesListView selectedRow]] postgresQuotedIdentifier]]];
+    } else if (tblType == SPTableTypeProc || tblType == SPTableTypeFunc) {
+         queryResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT pg_get_functiondef(%@::regproc)", [[filteredTables objectAtIndex:[tablesListView selectedRow]] tickQuotedString]]];
+    } else {
+        // Dummy result for tables as we use CREATE TABLE LIKE
+        queryResult = [[SPPostgresResult alloc] init];
+    }
 	[queryResult setReturnDataAsStrings:YES];
 
-	if ( ![queryResult numberOfRows] ) {
+	if ( ![queryResult numberOfRows] && tblType != SPTableTypeTable) { // Allow table copy without SHOW CREATE TABLE
 
 		//error while getting table structure
-		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't get create syntax.\nMySQL said: %@", @"message of panel when table information cannot be retrieved"), [mySQLConnection lastErrorMessage]] callback:nil];
+		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't get create syntax.\nPostgreSQL said: %@", @"message of panel when table information cannot be retrieved"), [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")] callback:nil];
 		return;
     }
 
@@ -2709,97 +3254,72 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	NSString *scanString;
 
 	if(tblType == SPTableTypeView){
-		scanner = [[NSScanner alloc] initWithString:[[queryResult getRowAsDictionary] objectForKey:@"Create View"]];
-		[scanner scanUpToString:@"AS" intoString:nil];
-		[scanner scanUpToString:@"" intoString:&scanString];
-		[mySQLConnection queryString:[NSString stringWithFormat:@"CREATE VIEW %@ %@", [tableName backtickQuotedString], scanString]];
+        NSString *viewDef = [[queryResult getRowAsArray] firstObject];
+		[postgresConnection queryString:[NSString stringWithFormat:@"CREATE VIEW %@ AS %@", [tableName postgresQuotedIdentifier], viewDef]];
 	}
 	else if(tblType == SPTableTypeTable){
-
-		// check for triggers: https://dev.mysql.com/doc/refman/5.7/en/rename-table.html
-		NSArray *triggers = [self->tableDataInstance triggers];
-
-		if (moveToDifferentDB == YES && triggers.count > 0){
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Warning", @"warning") message:NSLocalizedString(@"Cannot duplicate a table with triggers to a different database.", @"Cannot duplicate a table with triggers to a different database") callback:nil];
-			return;
-		}
-
-		scanner = [[NSScanner alloc] initWithString:[[queryResult getRowAsDictionary] objectForKey:@"Create Table"]];
-		[scanner scanUpToString:@"(" intoString:nil];
-		[scanner scanUpToString:@"" intoString:&scanString];
-
-		// If there are any InnoDB referencial constraints we need to strip out the names as they must be unique.
-		// MySQL will generate the new names based on the new table name.
-		scanString = [scanString stringByReplacingOccurrencesOfRegex:[NSString stringWithFormat:@"CONSTRAINT `[^`]+` "] withString:@""];
-
-		// If we're not copying the tables content as well then we need to strip out any AUTO_INCREMENT presets.
-		if (!copyTableContent) {
-			scanString = [scanString stringByReplacingOccurrencesOfRegex:[NSString stringWithFormat:@"AUTO_INCREMENT=[0-9]+ "] withString:@""];
-		}
-
-		NSString *queryStr =  [NSString stringWithFormat:@"CREATE TABLE %@ %@", (moveToDifferentDB == NO) ? [tableName backtickQuotedString] : [tempTableName backtickQuotedString], scanString];
-
-		SPLog("queryStr = %@", queryStr);
-
-		[mySQLConnection queryString:queryStr];
+		// Postgres copy table using LIKE
+		NSString *queryStr = [NSString stringWithFormat:@"CREATE TABLE %@ (LIKE %@ INCLUDING ALL)", (moveToDifferentDB == NO) ? [tableName postgresQuotedIdentifier] : [tempTableName postgresQuotedIdentifier], [[filteredTables objectAtIndex:[tablesListView selectedRow]] postgresQuotedIdentifier]];
+		[postgresConnection queryString:queryStr];
 	}
 	else if(tblType == SPTableTypeFunc || tblType == SPTableTypeProc)
 	{
 		// get the create syntax
-		SPMySQLResult *theResult;
+		SPPostgresResult *theResult;
 
-		if(selectedTableType == SPTableTypeProc)
-			theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW CREATE PROCEDURE %@", [selectedTableName backtickQuotedString]]];
-		else if([self tableType] == SPTableTypeFunc)
-			theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW CREATE FUNCTION %@", [selectedTableName backtickQuotedString]]];
+		if(selectedTableType == SPTableTypeProc || [self tableType] == SPTableTypeFunc)
+			theResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT pg_get_functiondef(%@::regproc)", [selectedTableName tickQuotedString]]];
 		else
 			return;
 
 		// Check for errors, only displaying if the connection hasn't been terminated
-		if ([mySQLConnection queryErrored]) {
-			if ([mySQLConnection isConnected]) {
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the create syntax for '%@'.\nMySQL said: %@", @"message of panel when create syntax cannot be retrieved"), selectedTableName, [mySQLConnection lastErrorMessage]] callback:nil];
+		if ([postgresConnection queryErrored]) {
+			if ([postgresConnection isConnected]) {
+				NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the create syntax for '%@'.\nPostgreSQL said: %@", @"message of panel when create syntax cannot be retrieved"), selectedTableName, lastError] callback:nil];
 			}
 			return;
 		}
 
 		[theResult setReturnDataAsStrings:YES];
-		NSString *tableSyntax = [[theResult getRowAsArray] objectAtIndex:2];
+		NSString *tableSyntax = [[theResult getRowAsArray] firstObject];
 
 		// replace the old name by the new one and drop the old one
-		[mySQLConnection queryString:[[tableSyntax unboxNull] stringByReplacingOccurrencesOfRegex:[NSString stringWithFormat:@"(?<=%@ )(`[^`]+?`)", [tableType uppercaseString]] withString:[tableName backtickQuotedString]]];
+		[postgresConnection queryString:[[tableSyntax unboxNull] stringByReplacingOccurrencesOfRegex:[NSString stringWithFormat:@"(?<=%@ )(`[^`]+?`)", [tableType uppercaseString]] withString:[tableName postgresQuotedIdentifier]]];
 
-		if ([mySQLConnection queryErrored]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't duplicate '%@'.\nMySQL said: %@", @"message of panel when an item cannot be renamed"), tableName, [mySQLConnection lastErrorMessage]] callback:nil];
+		if ([postgresConnection queryErrored]) {
+			NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't duplicate '%@'.\nPostgreSQL said: %@", @"message of panel when an item cannot be renamed"), tableName, lastError] callback:nil];
 		}
 
 	}
 
-	if ([mySQLConnection queryErrored]) {
+	if ([postgresConnection queryErrored]) {
 		//error while creating new table
-		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't create '%@'.\nMySQL said: %@", @"message of panel when table cannot be created"), tableName, [mySQLConnection lastErrorMessage]] callback:nil];
+		NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"Couldn't create '%@'.\nPostgreSQL said: %@", @"message of panel when table cannot be created"), tableName, lastError] callback:nil];
 		return;
 	}
 
 	if (copyTableContent) {
 		//copy table content
-		[mySQLConnection queryString:[NSString stringWithFormat:
+		[postgresConnection queryString:[NSString stringWithFormat:
 									  @"INSERT INTO %@ SELECT * FROM %@",
-									  (moveToDifferentDB == NO) ? [tableName backtickQuotedString] : [tempTableName backtickQuotedString],
-									  [selectedTableName backtickQuotedString]
+									  (moveToDifferentDB == NO) ? [tableName postgresQuotedIdentifier] : [tempTableName postgresQuotedIdentifier],
+									  [selectedTableName postgresQuotedIdentifier]
 									  ]];
 
-		if ([mySQLConnection queryErrored]) {
+		if ([postgresConnection queryErrored]) {
 			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Warning", @"warning") message:NSLocalizedString(@"There have been errors while copying table content. Please check the new table.", @"message of panel when table content cannot be copied") callback:nil];
 		}
 	}
 
 	if (moveToDifferentDB == YES){
 		SPLog(@"Copying table to new database, targetDatabaseName = %@", targetDatabaseName);
-		[self _moveTable:tableName from:mySQLConnection.database to:targetDatabaseName tempTable:tempTableName];
+		[self _moveTable:tableName from:postgresConnection.database to:targetDatabaseName tempTable:tempTableName];
 
 		SPMainQSync(^{
-			[self->mySQLConnection selectDatabase:targetDatabaseName];
+			[self->postgresConnection selectDatabase:targetDatabaseName];
 			[self->tableDocumentInstance selectDatabase:targetDatabaseName item:nil];
 			[self _renameTableOfType:SPTableTypeTableNewDB from:tempTableName to:tableName];
 		});
@@ -2854,17 +3374,17 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	if ([sourceDatabaseName isEqualToString:destinationDatabaseName]) return;
 
 	if(destinationDatabaseName && [destinationDatabaseName length]) {
-		NSString *query = [NSString stringWithFormat: @"ALTER TABLE %@.%@ RENAME %@.%@", [sourceDatabaseName backtickQuotedString], [tempTableName backtickQuotedString], [destinationDatabaseName backtickQuotedString], [tempTableName backtickQuotedString]];
+		NSString *query = [NSString stringWithFormat: @"ALTER TABLE %@.%@ RENAME %@.%@", [sourceDatabaseName postgresQuotedIdentifier], [tempTableName postgresQuotedIdentifier], [destinationDatabaseName postgresQuotedIdentifier], [tempTableName postgresQuotedIdentifier]];
 
 		SPLog(@"QUERY is %@", query);
 
-		[mySQLConnection queryString:query];
+		[postgresConnection queryString:query];
 
 		SPMainQSync(^{
-			if ([self->mySQLConnection queryErrored]) {
+			if ([self->postgresConnection queryErrored]) {
 				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Warning", @"warning") message:NSLocalizedString(@"There have been errors while copying table content. Please check the new table.", @"message of panel when table content cannot be copied") callback:nil];
 
-				SPLog(@"ERROR: %@", [self->mySQLConnection lastErrorMessage]);
+				SPLog(@"ERROR: %@", [self->postgresConnection lastErrorMessage]);
 			}
 		});
 	}
@@ -2908,19 +3428,21 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	//check if we are trying to rename a TABLE or a VIEW
 	if (tableType == SPTableTypeView || tableType == SPTableTypeTable || tableType == SPTableTypeTableNewDB) {
 		// we can use the rename table statement
-		[mySQLConnection queryString:[NSString stringWithFormat:@"RENAME TABLE %@ TO %@", [oldTableName backtickQuotedString], [newTableName backtickQuotedString]]];
+		[postgresConnection queryString:[NSString stringWithFormat:@"ALTER TABLE %@ RENAME TO %@", [oldTableName postgresQuotedIdentifier], [newTableName postgresQuotedIdentifier]]];
 		// check for errors
-		if ([mySQLConnection queryErrored]) {
+		if ([postgresConnection queryErrored]) {
 
-			if(mySQLConnection.lastErrorID == 1050 && tableType == SPTableTypeTableNewDB){
-				NSString *message = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while renaming '%@'.\n\nMySQL said: %@", @"rename table error informative message"), oldTableName, [mySQLConnection lastErrorMessage]];
+			// PostgreSQL: Check for "already exists" error message instead of MySQL error code
+			NSString *errorMsg = [[postgresConnection lastErrorMessage] lowercaseString] ?: @"";
+			if([errorMsg rangeOfString:@"already exists"].location != NSNotFound && tableType == SPTableTypeTableNewDB){
+				NSString *message = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while renaming '%@'.\n\nPostgreSQL said: %@", @"rename table error informative message"), oldTableName, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 
 				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Warning", @"warning") message:message callback:nil];
 
 				return;
 			}
 			else{
-				[NSException raise:@"MySQL Error" format:NSLocalizedString(@"An error occurred while renaming '%@'.\n\nMySQL said: %@", @"rename table error informative message"), oldTableName, [mySQLConnection lastErrorMessage]];
+				[NSException raise:@"PostgreSQL Error" format:NSLocalizedString(@"An error occurred while renaming '%@'.\n\nPostgreSQL said: %@", @"rename table error informative message"), oldTableName, [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error")];
 			}
 		}
 
@@ -2940,28 +3462,28 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 			default: break;
 		}
 
-		SPMySQLResult *theResult  = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW CREATE %@ %@", stringTableType, [oldTableName backtickQuotedString] ] ];
-		if ([mySQLConnection queryErrored]) {
-			[NSException raise:@"MySQL Error" format:NSLocalizedString(@"An error occurred while renaming. I couldn't retrieve the syntax for '%@'.\n\nMySQL said: %@", @"rename precedure/function error - can't retrieve syntax"), oldTableName, [mySQLConnection lastErrorMessage]];
+		SPPostgresResult *theResult  = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT pg_get_functiondef(%@::regproc)", [oldTableName tickQuotedString] ] ];
+		if ([postgresConnection queryErrored]) {
+			[NSException raise:@"PostgreSQL Error" format:NSLocalizedString(@"An error occurred while renaming. I couldn't retrieve the syntax for '%@'.\n\nPostgreSQL said: %@", @"rename precedure/function error - can't retrieve syntax"), oldTableName, [postgresConnection lastErrorMessage]];
 		}
 		[theResult setReturnDataAsStrings:YES];
-		NSString *oldCreateSyntax = [[theResult getRowAsArray] objectAtIndex:2];
+		NSString *oldCreateSyntax = [[theResult getRowAsArray] firstObject];
 
 		// replace the old name with the new name
-		NSRange rangeOfProcedureName = [oldCreateSyntax rangeOfString: [NSString stringWithFormat:@"%@ %@", stringTableType, [oldTableName backtickQuotedString] ] ];
+		NSRange rangeOfProcedureName = [oldCreateSyntax rangeOfString: [NSString stringWithFormat:@"%@ %@", stringTableType, [oldTableName postgresQuotedIdentifier] ] ];
 		if (rangeOfProcedureName.length == 0) {
 			[NSException raise:@"Unknown Syntax" format:NSLocalizedString(@"An error occurred while renaming. The CREATE syntax of '%@' could not be parsed.", @"rename error - invalid create syntax"), oldTableName];
 		}
 		NSString *newCreateSyntax = [oldCreateSyntax stringByReplacingCharactersInRange: rangeOfProcedureName
-			withString: [NSString stringWithFormat:@"%@ %@", stringTableType, [newTableName backtickQuotedString] ] ];
-		[mySQLConnection queryString: newCreateSyntax];
-		if ([mySQLConnection queryErrored]) {
-			[NSException raise:@"MySQL Error" format:NSLocalizedString(@"An error occurred while renaming. I couldn't recreate '%@'.\n\nMySQL said: %@", @"rename precedure/function error - can't recreate procedure"), oldTableName, [mySQLConnection lastErrorMessage]];
+			withString: [NSString stringWithFormat:@"%@ %@", stringTableType, [newTableName postgresQuotedIdentifier] ] ];
+		[postgresConnection queryString: newCreateSyntax];
+		if ([postgresConnection queryErrored]) {
+			[NSException raise:@"PostgreSQL Error" format:NSLocalizedString(@"An error occurred while renaming. I couldn't recreate '%@'.\n\nPostgreSQL said: %@", @"rename precedure/function error - can't recreate procedure"), oldTableName, [postgresConnection lastErrorMessage]];
 		}
 
-		[mySQLConnection queryString: [NSString stringWithFormat: @"DROP %@ %@", stringTableType, [oldTableName backtickQuotedString]]];
-		if ([mySQLConnection queryErrored]) {
-			[NSException raise:@"MySQL Error" format:NSLocalizedString(@"An error occurred while renaming. I couldn't delete '%@'.\n\nMySQL said: %@", @"rename precedure/function error - can't delete old procedure"), oldTableName, [mySQLConnection lastErrorMessage]];
+		[postgresConnection queryString: [NSString stringWithFormat: @"DROP %@ %@", stringTableType, [oldTableName postgresQuotedIdentifier]]];
+		if ([postgresConnection queryErrored]) {
+			[NSException raise:@"PostgreSQL Error" format:NSLocalizedString(@"An error occurred while renaming. I couldn't delete '%@'.\n\nPostgreSQL said: %@", @"rename precedure/function error - can't delete old procedure"), oldTableName, [postgresConnection lastErrorMessage]];
 		}
 		return;
 	}

@@ -31,7 +31,7 @@
 
 @class SPHistoryController;
 @class SPTableView;
-@class SPMySQLConnection;
+@class SPPostgresConnection;
 @class SPDatabaseDocument; 
 @class SPDatabaseData;
 @class SPTableStructure;
@@ -84,6 +84,9 @@
 
 	IBOutlet NSSearchField *listFilterField;
 
+	// Schema selection (PostgreSQL)
+	IBOutlet NSPopUpButton *schemaPopUpButton;
+
 	// Table list 'gear' menu items
 	IBOutlet NSMenuItem *removeTableMenuItem;
 	IBOutlet NSMenuItem *duplicateTableMenuItem;
@@ -97,7 +100,7 @@
 	IBOutlet NSMenuItem *separatorTableMenuItem2;
 	IBOutlet NSMenuItem *separatorTableMenuItem3;
 	
-	SPMySQLConnection *mySQLConnection;
+	SPPostgresConnection *postgresConnection;
 
 	// Table list context menu items
 	IBOutlet NSMenuItem *removeTableContextMenuItem;
@@ -129,8 +132,14 @@
 	BOOL isTableListFiltered;
 	BOOL tableListIsSelectable;
 	BOOL tableListContainsViews;
-	
+
 	SPCharsetCollationHelper *addTableCharsetHelper;
+
+	// Schema selection infrastructure (PostgreSQL)
+	NSString *selectedSchema;
+	NSMutableArray *availableSchemas;
+	NSMutableDictionary *objectsByCategory;
+	BOOL useCategorialView;
 }
 
 // IBAction methods
@@ -148,7 +157,7 @@
 - (IBAction)updateFilter:(nullable id)sender;
 
 // Additional methods
-- (void)setConnection:(nonnull SPMySQLConnection *)theConnection;
+- (void)setConnection:(nonnull SPPostgresConnection *)theConnection;
 - (void)setSelectionState:(nullable NSDictionary *)selectionDetails;
 - (void)selectTableAtIndex:(nullable NSNumber *)row;
 - (void)makeTableListFilterHaveFocus;
@@ -180,9 +189,28 @@
 - (BOOL)hasEvents;
 - (BOOL)hasNonTableObjects;
 
+// PostgreSQL-specific object getters
+- (BOOL)hasSequences;
+- (BOOL)hasMaterializedViews;
+- (BOOL)hasForeignTables;
+- (BOOL)hasDomains;
+- (BOOL)hasTypes;
+- (BOOL)hasAggregates;
+- (BOOL)hasOperators;
+- (BOOL)hasFTSConfigurations;
+
+- (nonnull NSArray *)allSequenceNames;
+- (nonnull NSArray *)allMaterializedViewNames;
+- (nonnull NSArray *)allForeignTableNames;
+- (nonnull NSArray *)allDomainNames;
+- (nonnull NSArray *)allTypeNames;
+- (nonnull NSArray *)allAggregateNames;
+- (nonnull NSArray *)allTriggerFunctionNames;
+
 // Setters
 - (BOOL)selectItemWithName:(nullable NSString *)theName;
 - (BOOL)selectItemsWithNames:(nonnull NSArray *)theNames;
+- (BOOL)selectTableName:(nullable NSString *)tableName;
 
 // Table list filter interaction
 - (void)showFilter;
@@ -200,5 +228,18 @@
 - (BOOL)isTableNameValid:(nullable NSString *)tableName forType:(SPTableType)tableType;
 - (BOOL)isTableNameValid:(nullable NSString *)tableName forType:(SPTableType)tableType ignoringSelectedTable:(BOOL)ignoreSelectedTable;
 - (BOOL)selectionShouldChangeInTableView:(nullable NSTableView *)aTableView;
+
+// Schema management (PostgreSQL)
+- (IBAction)schemaChanged:(nullable id)sender;
+- (void)loadSchemas;
+- (void)refreshObjectsForSchema:(nullable NSString *)schema;
+- (nullable NSString *)selectedSchema;
+- (void)setSelectedSchema:(nullable NSString *)schema;
+- (nonnull NSArray *)availableSchemas;
+
+// Categorized view management
+- (void)setUseCategorialView:(BOOL)useCategorized;
+- (BOOL)useCategorialView;
+- (nonnull NSDictionary *)objectsByCategory;
 
 @end

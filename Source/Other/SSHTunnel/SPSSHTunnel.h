@@ -30,9 +30,30 @@
 //
 //  More info at <https://github.com/sequelpro/sequelpro>
 
-#import <SPMySQL/SPMySQL.h>
+// SPPostgresConnectionProxy protocol - inlined to avoid include path issues
+#import <Foundation/Foundation.h>
 
-@interface SPSSHTunnel : NSObject <SPMySQLConnectionProxy>
+#ifndef SPPostgresConnectionProxyState_DEFINED
+#define SPPostgresConnectionProxyState_DEFINED
+typedef enum {
+    SPPostgresProxyIdle             = 0,
+    SPPostgresProxyConnecting       = 1,
+    SPPostgresProxyWaitingForAuth   = 2,
+    SPPostgresProxyConnected        = 3,
+    SPPostgresProxyForwardingFailed = 4,
+    SPPostgresProxyLaunchFailed     = 5
+} SPPostgresConnectionProxyState;
+#endif
+
+@protocol SPPostgresConnectionProxy <NSObject>
+- (void)connect;
+- (void)disconnect;
+- (SPPostgresConnectionProxyState)state;
+- (NSUInteger)localPort;
+- (BOOL)setConnectionStateChangeSelector:(SEL)theStateChangeSelector delegate:(id)theDelegate;
+@end
+
+@interface SPSSHTunnel : NSObject <SPPostgresConnectionProxy>
 {
 	id delegate;
 
@@ -58,7 +79,7 @@
 	NSInteger remotePort;
 	NSUInteger localPort;
 	NSUInteger localPortFallback;
-	SPMySQLConnectionProxyState connectionState;
+	SPPostgresConnectionProxyState connectionState;
     
     NSLock *answerAvailableLock;
     NSString *currentKeyName;
@@ -95,7 +116,7 @@
 - (BOOL)setPasswordKeychainName:(NSString *)theName account:(NSString *)theAccount;
 - (BOOL)setPassword:(NSString *)thePassword;
 - (BOOL)setKeyFilePath:(NSString *)thePath;
-- (SPMySQLConnectionProxyState)state;
+- (SPPostgresConnectionProxyState)state;
 - (NSString *)lastError;
 - (NSString *)debugMessages;
 - (NSUInteger)localPort;

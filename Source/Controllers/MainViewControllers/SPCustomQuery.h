@@ -43,8 +43,9 @@
 @class SPDataStorage;
 @class SPSplitView;
 @class SPFieldEditorController;
-@class SPMySQLConnection;
-@class SPMySQLStreamingResultStore;
+@class SPPostgresConnection;
+@class SPPostgresResult;
+@class SPPostgresStreamingResultStore;
 @class SPTextView;
 @class SPDatabaseDocument;
 @class SPTablesList;
@@ -118,7 +119,7 @@
 	SPQueryFavoriteManager *favoritesManager;
 
 	NSUserDefaults *prefs;
-	SPMySQLConnection *mySQLConnection;
+	SPPostgresConnection *postgresConnection;
 
 	NSString *usedQuery;
 	NSRange currentQueryRange;
@@ -208,7 +209,7 @@
 - (NSArray *)currentResult;
 - (NSArray *)currentDataResultWithNULLs:(BOOL)includeNULLs truncateDataFields:(BOOL)truncate;
 - (NSUInteger)currentResultRowCount;
-- (void)updateResultStore:(SPMySQLStreamingResultStore *)theResultStore;
+- (void)updateResultStore:(SPPostgresStreamingResultStore *)theResultStore;
 
 // Retrieving and setting table state
 - (void)updateTableView;
@@ -221,9 +222,9 @@
 - (void)clearResultViewDetailsToRestore;
 - (void)autosizeColumns;
 
-// MySQL Help
+// PostgreSQL Help
 - (void)showAutoHelpForCurrentWord:(id)sender;
-- (void)setMySQLversion:(NSString *)theVersion;
+- (void)setPostgresVersion:(NSString *)theVersion;
 
 // Task interaction
 - (void)startDocumentTaskForTab:(NSNotification *)aNotification;
@@ -233,7 +234,7 @@
 - (void)tableSortCallback;
 
 // Other
-- (void)setConnection:(SPMySQLConnection *)theConnection;
+- (void)setConnection:(SPPostgresConnection *)theConnection;
 - (void)doPerformQueryService:(NSString *)query;
 - (void)doPerformLoadQueryService:(NSString *)query;
 - (void)selectCurrentQuery;

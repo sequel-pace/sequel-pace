@@ -36,10 +36,10 @@
 #import "SPServerSupport.h"
 #import "SPFunctions.h"
 
-#import "sequel-ace-Swift.h"
+#import "sequel-pace-Swift.h"
 
 #import <pthread.h>
-#import <SPMySQL/SPMySQL.h>
+#import "SPPostgresConnection.h"
 
 @interface SPTableData ()
 
@@ -51,7 +51,7 @@
 @implementation SPTableData
 
 @synthesize tableHasAutoIncrementField;
-@synthesize connection = mySQLConnection;
+@synthesize connection = postgresConnection;
 
 - (id) init
 {
@@ -462,15 +462,15 @@
  */
 - (NSDictionary *) informationForTable:(NSString *)tableName fromDatabase:(NSString *)database
 {
-    BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
+    BOOL changeEncoding = NO; // PostgreSQL always uses UTF8
 
     // Catch unselected tables and return nil
     if ([tableName isEqualToString:@""] || !tableName) return nil;
 
     // Ensure the encoding is set to UTF8
     if (changeEncoding) {
-        [mySQLConnection storeEncodingForRestoration];
-        [mySQLConnection setEncoding:@"utf8mb4"];
+        [postgresConnection storeEncodingForRestoration];
+        [postgresConnection setEncoding:@"utf8mb4"];
     }
 
     // In cases where this method is called directly instead of via -updateInformationForCurrentTable
@@ -478,31 +478,34 @@
     // constraints being included in the table information (issue 1206).
     [constraints removeAllObjects];
 
-    // Retrieve the CREATE TABLE syntax for the table
-    SPMySQLResult *theResult;
+    // Retrieve the table information from information_schema
+    SPPostgresResult *theResult;
     NSString *queryStr;
 
     if (database){
-        queryStr = [NSString stringWithFormat:@"SHOW CREATE TABLE %@.%@", [database backtickQuotedString], [tableName backtickQuotedString]];
+        queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default, ordinal_position FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %@", [tableName tickQuotedString]];
     }
     else{
-        queryStr = [NSString stringWithFormat:@"SHOW CREATE TABLE %@", [tableName backtickQuotedString]];
+        queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default, ordinal_position FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %@", [tableName tickQuotedString]];
     }
 
-    theResult = [mySQLConnection queryString:queryStr];
+    theResult = [postgresConnection queryString:queryStr];
 
     SPLog(@"queryStr: %@", queryStr);
 
     [theResult setReturnDataAsStrings:YES];
 
     // Check for any errors, but only display them if a connection still exists
-    if ([mySQLConnection queryErrored]) {
-        if ([mySQLConnection isConnected]) {
-            NSString *errorMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the information for table '%@'. Please try again.\n\nMySQL said: %@", @"error retrieving table information informative message"),
-                       tableName, [mySQLConnection lastErrorMessage]];
+    if ([postgresConnection queryErrored]) {
+        if ([postgresConnection isConnected]) {
+            NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+            NSString *errorMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the information for table '%@'. Please try again.\n\nPostgreSQL said: %@", @"error retrieving table information informative message"),
+                       tableName, lastError];
 
             // If the current table doesn't exist anymore reload table list
-            if ([mySQLConnection lastErrorID] == 1146) {
+            // Check for PostgreSQL "does not exist" error pattern instead of MySQL error code 1146
+            NSString *lowerError = [lastError lowercaseString];
+            if ([lowerError containsString:@"does not exist"]) {
 
                 // Release the table loading lock to allow reselection/reloading to requery the database.
                 pthread_mutex_unlock(&dataProcessingLock);
@@ -513,47 +516,86 @@
             SPMainQSync(^{
                 [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error retrieving table information", @"error retrieving table information message") message:errorMessage callback:nil];
             });
-            if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+            if (changeEncoding) [postgresConnection restoreStoredEncoding];
         }
 
         return nil;
     }
 
-    // Retrieve the table syntax string
-    NSArray *syntaxResult = [theResult getRowAsArray];
-    NSArray *resultFieldNames = [theResult fieldNames];
+    // Process the result into tableData dictionary
+    NSMutableDictionary *tableData = [NSMutableDictionary dictionary];
+    NSMutableArray *tableColumns = [NSMutableArray array];
+    
+    // Use fast enumeration which returns dictionaries
+    for (NSDictionary *row in theResult) {
+        NSMutableDictionary *col = [NSMutableDictionary dictionary];
+        [col setObject:[row objectForKey:@"column_name"] ?: @"" forKey:@"name"];
+        [col setObject:[row objectForKey:@"data_type"] ?: @"" forKey:@"type"];
 
-    SPLog(@"syntaxResult: %@", syntaxResult);
-    SPLog(@"resultFieldNames: %@", resultFieldNames);
-
-    // MARK: removed isMySQL8 == YES, so this is used for all versions
-    if([database isEqualToString:SPMySQLInformationSchemaDatabase]){
-        resultFieldNames = @[@"Table", @"Create Table"];
-        syntaxResult = [self createTableSyntaxFromView:tableName withSyntaxResult:syntaxResult];
-    }
-
-    // Only continue if syntaxResult is not nil. This accommodates causes where the above query caused the
-    // connection reconnect dialog to appear and the user chose to close the connection.
-    if (!syntaxResult) {
-        if (changeEncoding){
-            [mySQLConnection restoreStoredEncoding];
+        // Safely convert character_maximum_length to string (may be NSNumber from libpq)
+        id maxLength = [row objectForKey:@"character_maximum_length"];
+        if (maxLength && ![maxLength isKindOfClass:[NSNull class]]) {
+            [col setObject:[maxLength isKindOfClass:[NSString class]] ? maxLength : [maxLength stringValue] forKey:@"length"];
+        } else {
+            [col setObject:@"" forKey:@"length"];
         }
-        return nil;
-    }
-    
-    // A NULL value indicates that the user does not have permission to view the syntax
-    if ([[syntaxResult safeObjectAtIndex:1] isNSNull] || [syntaxResult safeObjectAtIndex:1] == nil) {
-        [NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Permission Denied", @"Permission Denied") message:NSLocalizedString(@"The creation syntax could not be retrieved due to a permissions error.\n\nPlease check your user permissions with an administrator.", @"Create syntax permission denied detail") callback:nil];
-         
-         if (changeEncoding) [mySQLConnection restoreStoredEncoding];
-         return nil;
-    }
 
-    tableCreateSyntax = [[NSString alloc] initWithString:[syntaxResult objectAtIndex:1]];
+        // Safely check is_nullable (may be NSNumber or NSString from libpq)
+        id isNullable = [row objectForKey:@"is_nullable"];
+        BOOL nullable = NO;
+        if ([isNullable isKindOfClass:[NSString class]]) {
+            nullable = [isNullable isEqualToString:@"YES"];
+        } else if ([isNullable isKindOfClass:[NSNumber class]]) {
+            nullable = [isNullable boolValue];
+        }
+        [col setObject:nullable ? @"1" : @"0" forKey:@"null"];
+
+        [col setObject:[row objectForKey:@"column_default"] ?: @"" forKey:@"default"];
+        // PostgreSQL ordinal_position is 1-indexed, convert to 0-indexed for array access
+        NSInteger ordinalPosition = [[row objectForKey:@"ordinal_position"] integerValue];
+        [col setObject:@(ordinalPosition > 0 ? ordinalPosition - 1 : 0) forKey:@"datacolumnindex"];
+        
+        // Add typegrouping for PostgreSQL types
+        NSString *dataType = [[row objectForKey:@"data_type"] lowercaseString] ?: @"";
+        NSString *typegrouping = @"string";
+        if ([dataType containsString:@"int"] || [dataType containsString:@"serial"]) {
+            typegrouping = @"integer";
+        } else if ([dataType containsString:@"numeric"] || [dataType containsString:@"decimal"] || [dataType containsString:@"real"] || [dataType containsString:@"double"]) {
+            typegrouping = @"float";
+        } else if ([dataType containsString:@"text"] || [dataType containsString:@"varchar"] || [dataType containsString:@"char"]) {
+            typegrouping = @"textdata";
+        } else if ([dataType containsString:@"bytea"]) {
+            typegrouping = @"blobdata";
+        } else if ([dataType containsString:@"bool"]) {
+            typegrouping = @"bit";
+        } else if ([dataType containsString:@"date"] || [dataType containsString:@"time"]) {
+            typegrouping = @"datetime";
+        } else if ([dataType containsString:@"json"]) {
+            typegrouping = @"json";
+        } else if ([dataType containsString:@"geometry"] || [dataType containsString:@"point"] || [dataType containsString:@"polygon"]) {
+            typegrouping = @"geometry";
+        }
+        [col setObject:typegrouping forKey:@"typegrouping"];
+        
+        [tableColumns addObject:col];
+    }
     
-    NSDictionary *tableData = [self parseCreateStatement:tableCreateSyntax ofType:[resultFieldNames objectAtIndex:0]];
-    
-    if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+    [tableData setObject:tableColumns forKey:@"columns"];
+    [tableData setObject:@"utf8" forKey:@"encoding"]; // Default to utf8 for now
+
+    // Fetch primary keys
+    NSString *pkQuery = [NSString stringWithFormat:@"SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_name = %@ AND tc.table_schema = 'public'", [tableName tickQuotedString]];
+    SPPostgresResult *pkResult = [postgresConnection queryString:pkQuery];
+    NSMutableArray *pks = [NSMutableArray array];
+    for (NSDictionary *row in pkResult) {
+        id colName = [row objectForKey:@"column_name"];
+        if (colName && ![colName isKindOfClass:[NSNull class]]) {
+            [pks addObject:colName];
+        }
+    }
+    [tableData setObject:pks forKey:@"primarykeyfield"];
+
+    if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
     SPLog(@"cols count: %lu", ((NSDictionary*)[tableData safeObjectForKey:@"columns"]).count);
 
@@ -564,11 +606,11 @@
 
     SPLog(@"createTableSyntaxFromView");
 
-    NSString *queryStr = [NSString stringWithFormat:@"SHOW COLUMNS FROM %@", [tableName backtickQuotedString]];
+    NSString *queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = %@ AND table_schema = 'public'", [tableName tickQuotedString]];
 
     SPLog(@"queryStr: %@", queryStr);
 
-    SPMySQLResult *theResult = [mySQLConnection queryString:queryStr];
+    SPPostgresResult *theResult = [postgresConnection queryString:queryStr];
 
     NSMutableString *viewCreateStr = [[NSMutableString alloc] init];
 
@@ -579,17 +621,24 @@
     NSDictionary *tableRow;
     while ((tableRow = [theResult getRowAsDictionary]) != nil) {
 
-        NSString *Default = [tableRow safeObjectForKey:@"Default"];
-        NSString *Field = [tableRow safeObjectForKey:@"Field"];
-        NSString *Null = [tableRow safeObjectForKey:@"Null"];
-        NSString *Type = [tableRow safeObjectForKey:@"Type"];
+        NSString *Default = [tableRow safeObjectForKey:@"column_default"];
+        NSString *Field = [tableRow safeObjectForKey:@"column_name"];
+        id nullableValue = [tableRow safeObjectForKey:@"is_nullable"];
+        NSString *Type = [tableRow safeObjectForKey:@"data_type"];
 
-        // FIXME: are we sure this handles all scenarios?
-        if([Null isEqualToString:@"YES"]){
+        // Handle is_nullable which may be NSString or NSNumber from PostgreSQL
+        NSString *Null = @"";
+        BOOL isNullable = NO;
+        if ([nullableValue isKindOfClass:[NSString class]]) {
+            isNullable = [nullableValue isEqualToString:@"YES"];
+        } else if ([nullableValue isKindOfClass:[NSNumber class]]) {
+            isNullable = [nullableValue boolValue];
+        }
+
+        if (isNullable) {
             Null = @"";
             Default = @"DEFAULT NULL";
-        }
-        else if([Null isEqualToString:@"NO"]){
+        } else {
             Null = @"NOT NULL";
             Default = @"";
         }
@@ -613,12 +662,15 @@
     syntaxResult = @[tableName, viewCreateStr];
 
     // Check for any errors, but only display them if a connection still exists
-    if ([mySQLConnection queryErrored]) {
-        if ([mySQLConnection isConnected]) {
-            NSString *errorMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the information for table '%@'. Please try again.\n\nMySQL said: %@", @"error retrieving table information informative message"),
-                                      tableName, [mySQLConnection lastErrorMessage]];
+    if ([postgresConnection queryErrored]) {
+        if ([postgresConnection isConnected]) {
+            NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+            NSString *errorMessage = [NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the information for table '%@'. Please try again.\n\nPostgreSQL said: %@", @"error retrieving table information informative message"),
+                                      tableName, lastError];
             // If the current table doesn't exist anymore reload table list
-            if ([mySQLConnection lastErrorID] == 1146) {
+            // Check for PostgreSQL "does not exist" error pattern instead of MySQL error code 1146
+            NSString *lowerError = [lastError lowercaseString];
+            if ([lowerError containsString:@"does not exist"]) {
                 // Release the table loading lock to allow reselection/reloading to requery the database.
                 pthread_mutex_unlock(&dataProcessingLock);
                 [tableListInstance deselectAllTables];
@@ -646,7 +698,7 @@
  * assuming information like cardinality isn't needed.
  * This function is rather long due to the painful parsing required, but is fast.
  *
- * *WARNING* This method is only designed to handle the output of a "SHOW CREATE ..." query.
+ * *WARNING* This method is only designed to handle CREATE statement syntax (e.g., from pg_dump).
  *           DO NOT try to use it with user-defined input. The code does not handle the full possible syntax!
  */
 - (NSDictionary *)parseCreateStatement:(NSString *)tableDef ofType:(NSString *)tableType
@@ -923,10 +975,9 @@
 
 /**
  * Retrieve information which can be used to display views.  Unlike tables, all the information
- * for views cannot be extracted from the CREATE ALGORITHM syntax without selecting all the info
- * from the referenced tables.  For the time being we therefore use the column information for
- * SHOW COLUMNS (subsequently parsed), and derive the encoding from the database as no other source
- * is available.
+ * for views cannot be extracted from the view definition syntax without selecting all the info
+ * from the referenced tables.  For the time being we therefore use the column information from
+ * information_schema.columns (subsequently parsed).
  * Returns a boolean indicating success.
  */
 - (NSDictionary *) informationForView:(NSString *)viewName
@@ -935,32 +986,32 @@
 	NSMutableArray *tableColumns;
 	NSDictionary *resultRow;
 	NSMutableDictionary *tableColumn, *viewData;
-	BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
+	BOOL changeEncoding = NO; // PostgreSQL always uses UTF8
 
 	// Catch unselected views and return nil
 	if ([viewName isEqualToString:@""] || !viewName) return nil;
 
 	// Ensure that queries are made in UTF8
 	if (changeEncoding) {
-		[mySQLConnection storeEncodingForRestoration];
-		[mySQLConnection setEncoding:@"utf8mb4"];
+		[postgresConnection storeEncodingForRestoration];
+		[postgresConnection setEncoding:@"UTF8"];
 	}
 
-	// Retrieve the CREATE TABLE syntax for the table
-	SPMySQLResult *theResult = [mySQLConnection queryString: [NSString stringWithFormat: @"SHOW CREATE TABLE %@",
-																					   [viewName backtickQuotedString]
+	// Retrieve the view definition syntax
+	SPPostgresResult *theResult = [postgresConnection queryString: [NSString stringWithFormat: @"SELECT pg_get_viewdef(%@, true)",
+																					   [viewName postgresQuotedIdentifier]
 																					]];
 	[theResult setReturnDataAsStrings:YES];
 
 	// Check for any errors, but only display them if a connection still exists
-	if ([mySQLConnection queryErrored]) {
-		if ([mySQLConnection isConnected]) {
-			NSString *lastErrorMessage = [mySQLConnection lastErrorMessage];
+	if ([postgresConnection queryErrored]) {
+		if ([postgresConnection isConnected]) {
+			NSString *lastErrorMessage = [postgresConnection lastErrorMessage];
 			SPMainQSync(^{
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving information.\nMySQL said: %@", @"message of panel when retrieving information failed"), lastErrorMessage] callback:nil];
+				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving information.\nPostgres said: %@", @"message of panel when retrieving information failed"), lastErrorMessage] callback:nil];
 			});
 			if (changeEncoding) {
-				[mySQLConnection restoreStoredEncoding];
+				[postgresConnection restoreStoredEncoding];
 			}
 		}
 		return nil;
@@ -968,32 +1019,37 @@
 
 	// Retrieve the table syntax string
 	
-	NSString *syntaxString = [[theResult getRowAsArray] objectAtIndex:1];
+	NSString *syntaxString = [[theResult getRowAsArray] objectAtIndex:0];
 	
 	// Crash reports indicate that this does happen, however I'm not sure why.
 	if (!syntaxString) {
-		NSLog(@"%s: query for 'SHOW CREATE TABLE' returned nil but there was no connection error!? queryErrored=%d, userTriggeredDisconnect=%d, isConnected=%d, theResult=%@",__func__,[mySQLConnection queryErrored],[mySQLConnection userTriggeredDisconnect],[mySQLConnection isConnected],theResult);
+		NSLog(@"%s: query for 'pg_get_viewdef' returned nil but there was no connection error!? queryErrored=%d, userTriggeredDisconnect=%d, isConnected=%d, theResult=%@",__func__,[postgresConnection queryErrored],[postgresConnection userTriggeredDisconnect],[postgresConnection isConnected],theResult);
 		return nil;
 	}
 
 	// A NULL value indicates that the user does not have permission to view the syntax
 	if ([syntaxString isNSNull]) {
 		[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Permission Denied", @"Permission Denied") message:NSLocalizedString(@"The creation syntax could not be retrieved due to a permissions error.\n\nPlease check your user permissions with an administrator.", @"Create syntax permission denied detail") callback:nil];
-		if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+		if (changeEncoding) [postgresConnection restoreStoredEncoding];
 		return nil;
 	}
 
 	tableCreateSyntax = [[NSString alloc] initWithString:syntaxString];
 
-	// Retrieve the SHOW COLUMNS syntax for the table
-	theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW COLUMNS FROM %@", [viewName backtickQuotedString]]];
+	// Retrieve column information for the view using PostgreSQL's information_schema
+	// Note: PostgreSQL doesn't have an 'extra' column like MySQL, so we derive it from column_default
+	theResult = [postgresConnection queryString:[NSString stringWithFormat:
+		@"SELECT column_name AS \"Field\", data_type AS \"Type\", is_nullable AS \"Null\", column_default AS \"Default\", "
+		@"CASE WHEN column_default LIKE 'nextval%%' THEN 'auto_increment' ELSE '' END AS \"Extra\" "
+		@"FROM information_schema.columns WHERE table_name = %@ AND table_schema = 'public'", [viewName tickQuotedString]]];
 	[theResult setReturnDataAsStrings:YES];
 
 	// Check for any errors, but only display them if a connection still exists
-	if ([mySQLConnection queryErrored]) {
-		if ([mySQLConnection isConnected]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving information.\nMySQL said: %@", @"message of panel when retrieving information failed"), [mySQLConnection lastErrorMessage]] callback:nil];
-			if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+	if ([postgresConnection queryErrored]) {
+		if ([postgresConnection isConnected]) {
+			NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving information.\nPostgres said: %@", @"message of panel when retrieving information failed"), lastError] callback:nil];
+			if (changeEncoding) [postgresConnection restoreStoredEncoding];
 		}
 		return nil;
 	}
@@ -1037,7 +1093,7 @@
 		[viewData setObject:[NSString stringWithString:[tableDocumentInstance databaseEncoding]] forKey:@"encoding"];
 	[viewData setObject:[NSArray arrayWithArray:tableColumns] forKey:@"columns"];
 
-	if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+	if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
 	return viewData;
 }
@@ -1047,12 +1103,11 @@
  */
 - (BOOL)updateStatusInformationForCurrentTable
 {
-
     SPLog(@"updateStatusInformationForCurrentTable called");
 
 	pthread_mutex_lock(&dataProcessingLock);
 
-	BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
+	BOOL changeEncoding = NO; // PostgreSQL always uses UTF8
 
 	// Catch unselected tables and return false
 	if (![tableListInstance tableName]) {
@@ -1064,102 +1119,32 @@
 	// Ensure queries are run as UTF8mb4
 	if (changeEncoding) {
         SPLog(@"changeEncoding to utf8mb4 from utf8");
-		[mySQLConnection storeEncodingForRestoration];
-		[mySQLConnection setEncoding:@"utf8mb4"];
+		[postgresConnection storeEncodingForRestoration];
+		[postgresConnection setEncoding:@"utf8mb4"];
 	}
 
-	// Run the status query and retrieve as a dictionary.
-	NSMutableString *escapedTableName = [NSMutableString stringWithString:[tableListInstance tableName]];
-	[escapedTableName replaceOccurrencesOfString:@"\\" withString:@"\\\\" options:0 range:NSMakeRange(0, [escapedTableName length])];
-	[escapedTableName replaceOccurrencesOfString:@"'" withString:@"\\\'" options:0 range:NSMakeRange(0, [escapedTableName length])];
+    NSString *tableName = [tableListInstance tableName];
+    NSString *schema = @"public"; // Default schema
 
-	SPMySQLResult *tableStatusResult = nil;
+    NSMutableDictionary *statusDict = [NSMutableDictionary dictionary];
 
-	if ([tableListInstance tableType] == SPTableTypeProc) {
-		NSMutableString *escapedDatabaseName = [NSMutableString stringWithString:[tableDocumentInstance database]];
-		[escapedDatabaseName replaceOccurrencesOfString:@"'" withString:@"\\\'" options:0 range:NSMakeRange(0, [escapedDatabaseName length])];
-		tableStatusResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT * FROM information_schema.ROUTINES AS r WHERE r.SPECIFIC_NAME = '%@' AND r.ROUTINE_SCHEMA = '%@' AND r.ROUTINE_TYPE = 'PROCEDURE'", escapedTableName, escapedDatabaseName]];
-	}
-	else if ([tableListInstance tableType] == SPTableTypeFunc) {
-		NSMutableString *escapedDatabaseName = [NSMutableString stringWithString:[tableDocumentInstance database]];
-		[escapedDatabaseName replaceOccurrencesOfString:@"'" withString:@"\\\'" options:0 range:NSMakeRange(0, [escapedDatabaseName length])];
-		tableStatusResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT * FROM information_schema.ROUTINES AS r WHERE r.SPECIFIC_NAME = '%@' AND r.ROUTINE_SCHEMA = '%@' AND r.ROUTINE_TYPE = 'FUNCTION'", escapedTableName, escapedDatabaseName]];
-	}
-	else if ([tableListInstance tableType] == SPTableTypeView) {
-		NSMutableString *escapedDatabaseName = [NSMutableString stringWithString:[tableDocumentInstance database]];
-		[escapedDatabaseName replaceOccurrencesOfString:@"'" withString:@"\\\'" options:0 range:NSMakeRange(0, [escapedDatabaseName length])];
-		tableStatusResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT * FROM information_schema.VIEWS AS r WHERE r.TABLE_NAME = '%@' AND r.TABLE_SCHEMA = '%@'", escapedTableName, escapedDatabaseName]];
-	}
-	else if ([tableListInstance tableType] == SPTableTypeTable) {
-		[escapedTableName replaceOccurrencesOfRegex:@"\\\\(?=\\Z|[^\'])" withString:@"\\\\\\\\"];
-		tableStatusResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SHOW TABLE STATUS LIKE '%@'", escapedTableName ]];
-	}
-	[tableStatusResult setReturnDataAsStrings:YES]; //TODO: workaround for #2700 (#2699)
+    if ([tableListInstance tableType] == SPTableTypeTable) {
+        // Use GREATEST to clamp reltuples to 0 - PostgreSQL returns -1 for unanalyzed tables
+        NSString *query = [NSString stringWithFormat:@"SELECT GREATEST(c.reltuples::bigint, 0) AS \"Rows\", pg_total_relation_size(c.oid) AS \"Data_length\", 'PostgreSQL' AS \"Engine\" FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = '%@' AND c.relname = '%@'", schema, tableName];
+        
+        SPPostgresResult *res = [postgresConnection queryString:query];
+        if ([res numberOfRows] > 0) {
+            [statusDict addEntriesFromDictionary:[res getRowAsDictionary]];
+            [statusDict setObject:@"n" forKey:@"RowsCountAccurate"]; // Estimate
+        }
+    } else if ([tableListInstance tableType] == SPTableTypeView) {
+        [statusDict setObject:@"View" forKey:@"Engine"];
+        [statusDict setObject:@"No status information is available for views." forKey:@"Comment"];
+    }
+    
+    [status setDictionary:statusDict];
 
-			
-	// Check for any errors, only displaying them if the connection hasn't been terminated
-	if ([mySQLConnection queryErrored]) {
-		if ([mySQLConnection isConnected]) {
-			SPMainQSync(^{
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error", @"error") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving status data.\n\nMySQL said: %@", @"message of panel when retrieving view information failed"), [self->mySQLConnection lastErrorMessage]] callback:nil];
-			});
-			if (changeEncoding) [mySQLConnection restoreStoredEncoding];
-		}
-		pthread_mutex_unlock(&dataProcessingLock);
-		return NO;
-	}
-
-	// Retrieve the status as a dictionary and set as the cache
-	[status setDictionary:[tableStatusResult getRowAsDictionary]];
-
-	if ([tableListInstance tableType] == SPTableTypeTable) {
-
-		// Reassign any "Type" key - for MySQL < 4.1 - to "Engine" for consistency.
-		if ([status objectForKey:@"Type"]) {
-			[status safeSetObject:[status objectForKey:@"Type"] forKey:@"Engine"];
-		}
-
-		// Add a note for whether the row count is accurate or not - only for MyISAM
-		if ([[status safeObjectForKey:@"Engine"] isEqualToString:@"MyISAM"]) {
-			[status setObject:@"y" forKey:@"RowsCountAccurate"];
-		} else {
-			[status setObject:@"n" forKey:@"RowsCountAccurate"];
-		}
-
-		// [status objectForKey:@"Rows"] is NULL then try to get the number of rows via SELECT COUNT(1) FROM `foo`
-		// this happens e.g. for db "information_schema"
-		if([[status objectForKey:@"Rows"] isNSNull]) {
-			tableStatusResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [escapedTableName backtickQuotedString] ]];
-			// this query can fail e.g. if a table is damaged
-			if (tableStatusResult && ![mySQLConnection queryErrored]) {
-				[status safeSetObject:[[tableStatusResult getRowAsArray] firstObject] forKey:@"Rows"];
-				[status setObject:@"y" forKey:@"RowsCountAccurate"];
-			}
-			else {
-				//FIXME that error should really show only when trying to view the table content, but we don't even try to load that if Rows==NULL
-				[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Querying row count failed", @"table status : row count query failed : error title") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while trying to determine the number of rows for “%@”.\nMySQL said: %@ (%lu)", @"table status : row count query failed : error message"),[tableListInstance tableName],[mySQLConnection lastErrorMessage],[mySQLConnection lastErrorID]] callback:nil];
-			}
-		}
-	}
-
-	// When views are selected, populate the table by adding some default information.
-	else if ([tableListInstance tableType] == SPTableTypeView) {
-
-
-        // Create_time
-        NSDate *updateDate = [NSDateFormatter.naturalLanguageFormatter dateFromString:[status objectForKey:@"Create_time"]];
-
-        [status addEntriesFromDictionary:[NSDictionary dictionaryWithObjectsAndKeys:
-                                          @"View", @"Engine",
-                                          [NSDateFormatter.shortStyleNoTimeFormatter stringFromDate:updateDate], @"Create_time",
-                                          @"No status information is available for views.", @"Comment",
-                                          [tableListInstance tableName], @"Name",
-                                          [status objectForKey:@"COLLATION_CONNECTION"], @"Collation",
-                                          [status objectForKey:@"CHARACTER_SET_CLIENT"], @"CharacterSetClient",
-                                          nil]];
-	}
-
-	if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+	if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
 	pthread_mutex_unlock(&dataProcessingLock);
 
@@ -1174,22 +1159,24 @@
 	pthread_mutex_lock(&dataProcessingLock);
 
 	// Ensure queries are made in UTF8
-	BOOL changeEncoding = ![[mySQLConnection encoding] hasPrefix:@"utf8"];
+	BOOL changeEncoding = NO; // PostgreSQL always uses UTF8
 	if (changeEncoding) {
-		[mySQLConnection storeEncodingForRestoration];
-		[mySQLConnection setEncoding:@"utf8mb4"];
+		[postgresConnection storeEncodingForRestoration];
+		[postgresConnection setEncoding:@"utf8mb4"];
 	}
 
-	SPMySQLResult *theResult = [mySQLConnection queryString:[NSString stringWithFormat:@"/*!50003 SHOW TRIGGERS WHERE `Table` = %@ */",
-											  [[tableListInstance tableName] tickQuotedString]]];
+    NSString *query = [NSString stringWithFormat:@"SELECT trigger_name AS \"Trigger\", event_manipulation AS \"Event\", event_object_table AS \"Table\", action_statement AS \"Statement\", action_timing AS \"Timing\" FROM information_schema.triggers WHERE event_object_table = %@", [[tableListInstance tableName] tickQuotedString]];
+
+	SPPostgresResult *theResult = [postgresConnection queryString:query];
 	[theResult setReturnDataAsStrings:YES];
 
 	// Check for any errors, but only display them if a connection still exists
-	if ([mySQLConnection queryErrored]) {
-		if ([mySQLConnection isConnected]) {
-			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error retrieving trigger information", @"error retrieving trigger information message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the trigger information for table '%@'. Please try again.\n\nMySQL said: %@", @"error retrieving table information informative message"), [tableListInstance tableName], [mySQLConnection lastErrorMessage]] callback:nil];
-			
-			if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+	if ([postgresConnection queryErrored]) {
+		if ([postgresConnection isConnected]) {
+			NSString *lastError = [postgresConnection lastErrorMessage] ?: NSLocalizedString(@"Unknown error", @"unknown error");
+			[NSAlert createWarningAlertWithTitle:NSLocalizedString(@"Error retrieving trigger information", @"error retrieving trigger information message") message:[NSString stringWithFormat:NSLocalizedString(@"An error occurred while retrieving the trigger information for table '%@'. Please try again.\n\nPostgreSQL said: %@", @"error retrieving table information informative message"), [tableListInstance tableName], lastError] callback:nil];
+
+			if (changeEncoding) [postgresConnection restoreStoredEncoding];
 		}
 
 		pthread_mutex_unlock(&dataProcessingLock);
@@ -1197,7 +1184,7 @@
 	}
 	triggers = [[NSArray alloc] initWithArray:[theResult getAllRows]];
 
-	if (changeEncoding) [mySQLConnection restoreStoredEncoding];
+	if (changeEncoding) [postgresConnection restoreStoredEncoding];
 
 	pthread_mutex_unlock(&dataProcessingLock);
 
@@ -1249,8 +1236,8 @@
 	}
 
 	// Fetch the number of rows
-	SPMySQLResult *rowResult = [mySQLConnection queryString:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [[tableListInstance tableName] backtickQuotedString]]];
-	if ([mySQLConnection queryErrored] || !rowResult) {
+	SPPostgresResult *rowResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT COUNT(1) FROM %@", [[tableListInstance tableName] postgresQuotedIdentifier]]];
+	if ([postgresConnection queryErrored] || !rowResult) {
 		return NO;
 	}
 
@@ -1267,7 +1254,7 @@
 /**
  * Parse an array of field definition parts - not including name but including type and optionally unsigned/zerofill/null
  * and so forth - into a dictionary of parsed details.  Intended for use both with CREATE TABLE syntax - with fuller
- * details - and with the "type" column from SHOW COLUMNS.
+ * details - and with the "data_type" column from information_schema.columns.
  * Returns a dictionary of details with lowercase keys.
  */
 - (NSDictionary *) parseFieldDefinitionStringParts:(NSArray *)definitionParts
@@ -1329,38 +1316,83 @@
 		}
 	}
 
-	// Also capture a general column type "group" to allow behavioural switches
+	// Also capture a general column type "group" to allow behavioural switches (PostgreSQL)
 	detailString = [[NSString alloc] initWithString:[fieldDetails objectForKey:@"type"]];
-	if ([detailString isEqualToString:@"BIT"]) {
-		[fieldDetails setObject:@"bit" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"TINYINT"] || [detailString isEqualToString:@"SMALLINT"] || [detailString isEqualToString:@"MEDIUMINT"]
-				|| [detailString isEqualToString:@"INT"] || [detailString isEqualToString:@"INTEGER"] || [detailString isEqualToString:@"BIGINT"]) {
-		[fieldDetails setObject:@"integer" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"REAL"] || [detailString isEqualToString:@"DOUBLE"] || [detailString isEqualToString:@"FLOAT"]
-				|| [detailString isEqualToString:@"DECIMAL"] || [detailString isEqualToString:@"NUMERIC"]) {
-		[fieldDetails setObject:@"float" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"DATE"] || [detailString isEqualToString:@"TIME"] || [detailString isEqualToString:@"TIMESTAMP"]
-				|| [detailString isEqualToString:@"DATETIME"] || [detailString isEqualToString:@"YEAR"]) {
-		[fieldDetails setObject:@"date" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"CHAR"] || [detailString isEqualToString:@"VARCHAR"]) {
-		[fieldDetails setObject:@"string" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"BINARY"] || [detailString isEqualToString:@"VARBINARY"]) {
-		[fieldDetails setObject:@"binary" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"ENUM"] || [detailString isEqualToString:@"SET"]) {
-		[fieldDetails setObject:@"enum" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"TINYTEXT"] || [detailString isEqualToString:@"TEXT"]
-				|| [detailString isEqualToString:@"MEDIUMTEXT"] || [detailString isEqualToString:@"LONGTEXT"]
-	            || [detailString isEqualToString:@"JSON"]) { // JSON is seen as a text type by us, but works a bit different (e.g. encoding is always "utf8mb4")
-		[fieldDetails setObject:@"textdata" forKey:@"typegrouping"];
-	} else if ([detailString isEqualToString:@"POINT"] || [detailString isEqualToString:@"GEOMETRY"]
-				|| [detailString isEqualToString:@"LINESTRING"] || [detailString isEqualToString:@"POLYGON"]
-				|| [detailString isEqualToString:@"MULTIPOLYGON"] || [detailString isEqualToString:@"GEOMETRYCOLLECTION"]
-				|| [detailString isEqualToString:@"MULTIPOINT"] || [detailString isEqualToString:@"MULTILINESTRING"]) {
-		[fieldDetails setObject:@"geometry" forKey:@"typegrouping"];
 
-	// Default to "blobdata".  This means that future and currently unsupported types - including spatial extensions -
+	// Bit string types
+	if ([detailString isEqualToString:@"BIT"] || [detailString isEqualToString:@"BIT VARYING"] || [detailString isEqualToString:@"VARBIT"]) {
+		[fieldDetails setObject:@"bit" forKey:@"typegrouping"];
+	}
+	// Integer types (PostgreSQL)
+	else if ([detailString isEqualToString:@"SMALLINT"] || [detailString isEqualToString:@"INTEGER"] || [detailString isEqualToString:@"INT"]
+				|| [detailString isEqualToString:@"BIGINT"]
+				|| [detailString isEqualToString:@"SMALLSERIAL"] || [detailString isEqualToString:@"SERIAL"] || [detailString isEqualToString:@"BIGSERIAL"]) {
+		[fieldDetails setObject:@"integer" forKey:@"typegrouping"];
+	}
+	// Floating point and decimal types (PostgreSQL)
+	else if ([detailString isEqualToString:@"REAL"] || [detailString isEqualToString:@"DOUBLE PRECISION"]
+				|| [detailString isEqualToString:@"DECIMAL"] || [detailString isEqualToString:@"NUMERIC"]
+				|| [detailString isEqualToString:@"MONEY"]) {
+		[fieldDetails setObject:@"float" forKey:@"typegrouping"];
+	}
+	// Date/time types (PostgreSQL)
+	else if ([detailString isEqualToString:@"DATE"] || [detailString isEqualToString:@"TIME"]
+				|| [detailString isEqualToString:@"TIME WITH TIME ZONE"] || [detailString isEqualToString:@"TIMETZ"]
+				|| [detailString isEqualToString:@"TIMESTAMP"] || [detailString isEqualToString:@"TIMESTAMP WITH TIME ZONE"] || [detailString isEqualToString:@"TIMESTAMPTZ"]
+				|| [detailString isEqualToString:@"INTERVAL"]) {
+		[fieldDetails setObject:@"date" forKey:@"typegrouping"];
+	}
+	// Character types (PostgreSQL)
+	else if ([detailString isEqualToString:@"CHARACTER"] || [detailString isEqualToString:@"CHAR"]
+				|| [detailString isEqualToString:@"CHARACTER VARYING"] || [detailString isEqualToString:@"VARCHAR"]) {
+		[fieldDetails setObject:@"string" forKey:@"typegrouping"];
+	}
+	// Binary type (PostgreSQL - bytea)
+	else if ([detailString isEqualToString:@"BYTEA"]) {
+		[fieldDetails setObject:@"binary" forKey:@"typegrouping"];
+	}
+	// Boolean type (PostgreSQL)
+	else if ([detailString isEqualToString:@"BOOLEAN"] || [detailString isEqualToString:@"BOOL"]) {
+		[fieldDetails setObject:@"boolean" forKey:@"typegrouping"];
+	}
+	// Text and JSON types (PostgreSQL)
+	else if ([detailString isEqualToString:@"TEXT"]
+				|| [detailString isEqualToString:@"JSON"] || [detailString isEqualToString:@"JSONB"]) {
+		[fieldDetails setObject:@"textdata" forKey:@"typegrouping"];
+	}
+	// Geometric types (PostgreSQL native)
+	else if ([detailString isEqualToString:@"POINT"] || [detailString isEqualToString:@"LINE"]
+				|| [detailString isEqualToString:@"LSEG"] || [detailString isEqualToString:@"BOX"]
+				|| [detailString isEqualToString:@"PATH"] || [detailString isEqualToString:@"POLYGON"]
+				|| [detailString isEqualToString:@"CIRCLE"]) {
+		[fieldDetails setObject:@"geometry" forKey:@"typegrouping"];
+	}
+	// Network types (PostgreSQL)
+	else if ([detailString isEqualToString:@"CIDR"] || [detailString isEqualToString:@"INET"]
+				|| [detailString isEqualToString:@"MACADDR"] || [detailString isEqualToString:@"MACADDR8"]) {
+		[fieldDetails setObject:@"network" forKey:@"typegrouping"];
+	}
+	// UUID type (PostgreSQL)
+	else if ([detailString isEqualToString:@"UUID"]) {
+		[fieldDetails setObject:@"uuid" forKey:@"typegrouping"];
+	}
+	// Range types (PostgreSQL)
+	else if ([detailString isEqualToString:@"INT4RANGE"] || [detailString isEqualToString:@"INT8RANGE"]
+				|| [detailString isEqualToString:@"NUMRANGE"] || [detailString isEqualToString:@"TSRANGE"]
+				|| [detailString isEqualToString:@"TSTZRANGE"] || [detailString isEqualToString:@"DATERANGE"]) {
+		[fieldDetails setObject:@"range" forKey:@"typegrouping"];
+	}
+	// Text search types (PostgreSQL)
+	else if ([detailString isEqualToString:@"TSVECTOR"] || [detailString isEqualToString:@"TSQUERY"]) {
+		[fieldDetails setObject:@"textsearch" forKey:@"typegrouping"];
+	}
+	// XML type (PostgreSQL)
+	else if ([detailString isEqualToString:@"XML"]) {
+		[fieldDetails setObject:@"xml" forKey:@"typegrouping"];
+	}
+	// Default to "blobdata". This means that future and currently unsupported types
 	// will be preserved unmangled.
-	} else {
+	else {
 		[fieldDetails setObject:@"blobdata" forKey:@"typegrouping"];
 	}
 

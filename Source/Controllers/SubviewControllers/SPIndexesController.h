@@ -32,7 +32,7 @@
 @class SPTablesList;
 @class SPTableData;
 @class SPTableStructure;
-@class SPMySQLConnection;
+@class SPPostgresConnection;
 @class SPTableView;
 
 @interface SPIndexesController : NSWindowController <NSTableViewDelegate, NSTableViewDataSource, NSComboBoxCellDataSource>
@@ -69,6 +69,8 @@
 	IBOutlet NSTextField *indexKeyBlockSizeTextField;
 		
 	BOOL mainNibLoaded;
+	// Note: PostgreSQL doesn't have storage engine types like MySQL
+	// These flags are kept for compatibility but are always NO
 	BOOL isMyISAMTable;
 	BOOL isInnoDBTable;
 	NSString *table;
@@ -78,7 +80,7 @@
 	
 	NSUserDefaults *prefs;
 	
-	SPMySQLConnection *connection;
+	SPPostgresConnection *connection;
 
 	BOOL showAdvancedView;
 	
@@ -93,9 +95,9 @@
 @property (readwrite, copy) NSString *table;
 
 /**
- * @property connection The MySQL connection to use
+ * @property connection The PostgreSQL connection to use
  */
-@property (readwrite, strong) SPMySQLConnection *connection;
+@property (readwrite, strong) SPPostgresConnection *connection;
 
 - (IBAction)addIndex:(id)sender;
 - (IBAction)removeIndex:(id)sender;
