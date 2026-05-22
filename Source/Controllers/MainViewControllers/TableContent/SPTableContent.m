@@ -1716,7 +1716,7 @@ static id configureDataCell(SPTableContent *tc, NSDictionary *colDefs, NSString 
 	// Get the primary key if there is one, using any columns present within it
 	// Get the primary key if there is one, using any columns present within it
 	SPPostgresResult *theResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT a.attname AS \"Field\", (SELECT 'PRI' FROM pg_index i JOIN pg_attribute a2 ON a2.attrelid = i.indrelid AND a2.attnum = ANY(i.indkey) WHERE i.indrelid = c.oid AND i.indisprimary AND a2.attnum = a.attnum) AS \"Key\" FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_attribute a ON a.attrelid = c.oid WHERE n.nspname = %@ AND c.relname = %@ AND a.attnum > 0 AND NOT a.attisdropped",
-		[database tickQuotedString], [tableForColumn tickQuotedString]]];
+		[[tablesListInstance selectedSchema] tickQuotedString], [tableForColumn tickQuotedString]]];
 	[theResult setReturnDataAsStrings:YES];
 	NSMutableArray *primaryColumnsInSpecifiedTable = [NSMutableArray array];
 	for (NSDictionary *eachRow in theResult) {
@@ -1876,8 +1876,8 @@ static id configureDataCell(SPTableContent *tc, NSDictionary *colDefs, NSString 
 		@"column_default AS \"Default\", "
 		@"CASE WHEN column_default LIKE 'nextval%%' THEN 'auto_increment' ELSE '' END AS \"Extra\" "
 		@"FROM information_schema.columns "
-		@"WHERE table_schema = 'public' AND table_name = %@",
-		[selectedTable tickQuotedString]]];
+		@"WHERE table_schema = %@ AND table_name = %@",
+		[[tablesListInstance selectedSchema] tickQuotedString], [selectedTable tickQuotedString]]];
 
 	[queryResult setReturnDataAsStrings:YES];
 
@@ -1948,7 +1948,7 @@ static id configureDataCell(SPTableContent *tc, NSDictionary *colDefs, NSString 
 			[[alert suppressionButton] setState:([prefs boolForKey:SPResetAutoIncrementAfterDeletionOfAllRows]) ? NSControlStateValueOn : NSControlStateValueOff];
 			[[[alert suppressionButton] cell] setControlSize:NSControlSizeSmall];
 			[[[alert suppressionButton] cell] setFont:[NSFont systemFontOfSize:11]];
-			[[alert suppressionButton] setTitle:NSLocalizedString(@"Reset AUTO_INCREMENT after deletion\n(only for Delete ALL ROWS IN TABLE)?", @"reset auto_increment after deletion of all rows button")];
+			[[alert suppressionButton] setTitle:NSLocalizedString(@"Reset sequence after deletion\n(only for Delete ALL ROWS IN TABLE)?", @"reset sequence after deletion of all rows button")];
 		}
 	}
 	

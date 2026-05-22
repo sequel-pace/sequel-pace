@@ -53,7 +53,7 @@
 	if ((self = [super initWithWindowNibName:@"SequenceEditor"])) {
 		tableDocumentInstance = document;
 		connection = [document getConnection];
-		currentSchema = @"public";
+		currentSchema = [document.tablesListInstance selectedSchema] ?: @"public";
 		editingSequenceName = nil;
 		isEditMode = NO;
 	}

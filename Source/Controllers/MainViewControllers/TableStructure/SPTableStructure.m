@@ -626,12 +626,18 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 
 	// PostgreSQL: Find the sequence name for SERIAL/IDENTITY columns and reset it
 	// First, find any columns with nextval() in their default value
+	// Build schema-qualified table name for pg_get_serial_sequence (e.g. '"staging"."mytable"')
+	NSString *schemaQualifiedTable = [NSString stringWithFormat:@"%@.%@",
+		[[tablesListInstance selectedSchema] postgresQuotedIdentifier],
+		[selTable postgresQuotedIdentifier]];
 	SPPostgresResult *seqResult = [postgresConnection queryString:[NSString stringWithFormat:
 		@"SELECT pg_get_serial_sequence(%@, column_name) AS seq_name "
 		@"FROM information_schema.columns "
-		@"WHERE table_schema = 'public' AND table_name = %@ "
+		@"WHERE table_schema = %@ AND table_name = %@ "
 		@"AND column_default LIKE 'nextval%%'",
-		[selTable tickQuotedString], [selTable tickQuotedString]]];
+		[schemaQualifiedTable tickQuotedString],
+		[[tablesListInstance selectedSchema] tickQuotedString],
+		[selTable tickQuotedString]]];
 
 	[seqResult setReturnDataAsStrings:YES];
 
@@ -1005,8 +1011,8 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
             }
         }
 
-		// Don't provide any defaults for auto-increment & generated field
-		if (![theRowExtra isEqualToString:@"AUTO_INCREMENT"] && ![theRowGeneratedAlways length]) {
+		// Don't provide any defaults for serial/identity & generated field
+		if (![theRowExtra isEqualToString:@"SERIAL DEFAULT VALUE"] && ![theRowGeneratedAlways length]) {
 			NSArray *matches;
 			NSString *defaultValue = [theRow objectForKey:@"default"];
             // Check if defaultValue is an expression - Must be surrunded by ( and )
@@ -1288,8 +1294,8 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	NSString *nullValue = [prefs stringForKey:SPNullValue];
 	CFStringRef escapedNullValue = CFXMLCreateStringByEscapingEntities(NULL, ((CFStringRef)nullValue), NULL);
 
-	SPPostgresResult *structureQueryResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT column_name AS Field, data_type AS Type, is_nullable AS \"Null\", column_default AS \"Default\" FROM information_schema.columns WHERE table_name = %@", [selectedTable tickQuotedString]]];
-	SPPostgresResult *indexesQueryResult   = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT indexname AS Key_name, indexdef AS Index_type FROM pg_indexes WHERE tablename = %@", [selectedTable tickQuotedString]]];
+	SPPostgresResult *structureQueryResult = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT column_name AS Field, data_type AS Type, is_nullable AS \"Null\", column_default AS \"Default\" FROM information_schema.columns WHERE table_schema = %@ AND table_name = %@ ORDER BY ordinal_position", [[tablesListInstance selectedSchema] tickQuotedString], [selectedTable tickQuotedString]]];
+	SPPostgresResult *indexesQueryResult   = [postgresConnection queryString:[NSString stringWithFormat:@"SELECT indexname AS Key_name, indexdef AS Index_type FROM pg_indexes WHERE schemaname = %@ AND tablename = %@", [[tablesListInstance selectedSchema] tickQuotedString], [selectedTable tickQuotedString]]];
 
 	[structureQueryResult setReturnDataAsStrings:YES];
 	[indexesQueryResult setReturnDataAsStrings:YES];
@@ -1979,7 +1985,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 	else if ([[aTableColumn identifier] isEqualToString:@"Extra"]) {
 		if (![[currentRow objectForKey:@"Extra"] isEqualToString:anObject]) {
 
-			isCurrentExtraAutoIncrement = [[[anObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString] isEqualToString:@"AUTO_INCREMENT"];
+			isCurrentExtraAutoIncrement = [[[anObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString] isEqualToString:@"SERIAL DEFAULT VALUE"];
 
 			if (isCurrentExtraAutoIncrement) {
 				[currentRow setObject:@0 forKey:@"null"];
@@ -2352,7 +2358,7 @@ static void _BuildMenuWithPills(NSMenu *menu,struct _cmpMap *map,size_t mapEntri
 			id engineValue = [tableDataInstance statusValueForKey:@"Engine"];
 
 			BOOL isPrimaryKey = [keyValue isKindOfClass:[NSString class]] && [keyValue isEqualToString:@"PRI"];
-			BOOL isAutoIncrement = [extraValue isKindOfClass:[NSString class]] && [[extraValue uppercaseString] isEqualToString:@"AUTO_INCREMENT"];
+			BOOL isAutoIncrement = [extraValue isKindOfClass:[NSString class]] && [[extraValue uppercaseString] isEqualToString:@"SERIAL DEFAULT VALUE"];
 			BOOL isCsvEngine = [engineValue isKindOfClass:[NSString class]] && [[engineValue uppercaseString] isEqualToString:@"CSV"];
 
 			[aCell setEnabled:(isPrimaryKey || isAutoIncrement || isCsvEngine) ? NO : YES];

@@ -224,7 +224,6 @@ platform :mac do
       # Bump build number
       increment_build_number(xcodeproj: PROJECT_NAME)
       increment_build_number(xcodeproj: QK_PROJECT_NAME)
-      increment_build_number(xcodeproj: SPMYSQL_PROJECT_NAME)
       sh "git add -A && git commit -m 'Increment build version'"
    end
 
@@ -232,7 +231,6 @@ platform :mac do
    lane :increment_app_version do |options|
       increment_version_number(xcodeproj: PROJECT_NAME, bump_type: "minor")
       increment_version_number(xcodeproj: QK_PROJECT_NAME, bump_type: "minor")
-      increment_version_number(xcodeproj: SPMYSQL_PROJECT_NAME, bump_type: "minor")
       sh "git add -A && git commit -m 'Increment app version'"
    end
 
@@ -240,7 +238,6 @@ platform :mac do
    lane :increment_app_patch_version do |options|
       increment_version_number(xcodeproj: PROJECT_NAME, bump_type: "patch")
       increment_version_number(xcodeproj: QK_PROJECT_NAME, bump_type: "patch")
-      increment_version_number(xcodeproj: SPMYSQL_PROJECT_NAME, bump_type: "patch")
       sh "git add -A && git commit -m 'Increment app patch version'"
    end
 end

@@ -244,199 +244,141 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 			[postgresConnection setEncoding:@"UTF8"];
 		}
 
-		// Load available schemas if not already loaded
-		if ([availableSchemas count] == 0) {
-			[self loadSchemas];
-		}
+		// Always reload schemas on each updateTables: call to pick up new/removed schemas
+		[self loadSchemas];
 
 		// Select the table list for the current database and schema.
 		NSString *schemaToUse = selectedSchema ?: @"public";
-		NSString *query = [NSString stringWithFormat:@"SELECT table_name, table_type, obj_description(('%@.' || quote_ident(table_name))::regclass) as comment FROM information_schema.tables WHERE table_schema = '%@' ORDER BY table_name", schemaToUse, schemaToUse];
-        NSLog(@"SPTablesList: Executing query: %@", query);
-        theResult = [postgresConnection queryString:query];
-        NSLog(@"SPTablesList: Query returned %lu rows, %lu fields", (unsigned long)[theResult numberOfRows], (unsigned long)[theResult numberOfFields]);
-		// [theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
-		// [theResult setReturnDataAsStrings:YES]; // TODO: workaround for bug #2700 (#2699)
-		if ([theResult numberOfFields] == 1 && [[theResult getRow] isKindOfClass:[NSArray class]]) {
-			for (NSArray *eachRow in theResult) {
-				[tables addObject:[eachRow objectAtIndex:0]];
+		// Use server-side format('%I.%I', ...) for safe schema-qualified regclass in obj_description
+		theResult = [postgresConnection queryString:[NSString stringWithFormat:
+			@"SELECT table_name, table_type, "
+			@"obj_description(format('%%I.%%I', table_schema, table_name)::regclass, 'pg_class') AS comment "
+			@"FROM information_schema.tables WHERE table_schema = %@ ORDER BY table_name",
+			[schemaToUse tickQuotedString]]];
+		[theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		[theResult setReturnDataAsStrings:YES];
+
+		for (NSDictionary *eachRow in theResult) {
+			id tableName = [eachRow objectForKey:@"table_name"];
+			if (!tableName || [tableName isKindOfClass:[NSNull class]]) continue;
+			[tables addObject:tableName];
+
+			id tableComment = [eachRow objectForKey:@"comment"];
+			if (!tableComment || [tableComment isKindOfClass:[NSNull class]]) tableComment = @"";
+			[tableComments setValue:tableComment forKey:tableName];
+
+			NSString *tableType = [eachRow objectForKey:@"table_type"];
+			if ([tableType isEqualToString:@"VIEW"]) {
+				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeView]];
+				tableListContainsViews = YES;
+			} else {
 				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
 			}
-		} else {
-            NSUInteger rowIdx = 0;
-			for (id eachRow in theResult) {
-                @try {
-                    NSLog(@"SPTablesList: Row %lu class: %@", (unsigned long)rowIdx, NSStringFromClass([eachRow class]));
-                    
-                    // Safe handling: check if it's a dictionary or array
-                    if (![eachRow isKindOfClass:[NSDictionary class]]) {
-                        NSLog(@"SPTablesList: WARNING - Row is NOT NSDictionary, it's %@", NSStringFromClass([eachRow class]));
-                        if ([eachRow isKindOfClass:[NSArray class]]) {
-                            NSArray *arr = (NSArray *)eachRow;
-                            if ([arr count] > 0) {
-                                [tables addObject:[arr objectAtIndex:0]];
-                                [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
-                            }
-                        }
-                        rowIdx++;
-                        continue;
-                    }
-                    
-                    NSDictionary *dictRow = (NSDictionary *)eachRow;
-                    NSMutableDictionary *mutableRow = [dictRow mutableCopy];
-                    NSString *tableType = [mutableRow objectForKey:@"table_type"];
-                    [mutableRow removeObjectForKey:@"table_type"];
-
-                    // Due to encoding problems it can be the case that [resultRow objectAtIndex:0]
-                    // return NSNull, thus catch that case for safety reasons
-                    id tableName = [mutableRow objectForKey:@"table_name"];
-                    if (tableName == nil || [tableName isNSNull]) {
-                        tableName = [mutableRow objectForKey:@"NAME"];
-                    }
-                    if ((tableName == nil || [tableName isNSNull]) && mutableRow.allValues.count == 1) {
-                        tableName = [mutableRow.allValues firstObject];
-                    }
-                    if (tableName == nil || [tableName isNSNull]) {
-                        tableName = @"...";
-                    }
-                    NSLog(@"SPTablesList: Found table: %@, type: %@", tableName, tableType);
-                    [tables addObject:tableName];
-                    
-                    // comments is usefull
-                    id tableComment = [mutableRow objectForKey:@"comment"];
-                    if (tableComment == nil || [tableComment isNSNull]) {
-                        tableComment = [mutableRow objectForKey:@"COMMENT"];
-                    }
-                    if (tableComment == nil || [tableComment isNSNull]) {
-                        tableComment = @"";
-                    }
-                    [tableComments setValue:tableComment forKey:tableName];
-
-                    if ([@"VIEW" isEqualToString:tableComment] || [@"VIEW" isEqualToString:tableType]) {
-                        [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeView]];
-                        tableListContainsViews = YES;
-                    } else {
-                        [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeTable]];
-                    }
-                } @catch (NSException *ex) {
-                    NSLog(@"SPTablesList: EXCEPTION at row %lu: %@ - %@", (unsigned long)rowIdx, [ex name], [ex reason]);
-                }
-                rowIdx++;
-			}
 		}
-        NSLog(@"SPTablesList: Table enumeration complete, found %lu tables", (unsigned long)[tables count]);
+
+		// Insert the TABLES / TABLES & VIEWS header at the beginning of the list
+		{
+			NSString *tablesHeader = tableListContainsViews
+				? NSLocalizedString(@"TABLES & VIEWS", @"header for table & views list")
+				: NSLocalizedString(@"TABLES", @"header for table list");
+			[tables insertObject:tablesHeader atIndex:0];
+			[tableTypes insertObject:[NSNumber numberWithInteger:SPTableTypeNone] atIndex:0];
+		}
 
 		/* Grab the procedures and functions
 		 *
 		 * Using information_schema gives us more info (for information window perhaps?) but breaks
 		 * backward compatibility with pre 4 I believe. I left the other methods below, in case.
 		 */
-		NSString *pQuery = [NSString stringWithFormat:@"SELECT routine_name, routine_type FROM information_schema.routines WHERE routine_schema = '%@' ORDER BY routine_name", schemaToUse];
-        theResult = [postgresConnection queryString:pQuery];
-        // [theResult setDefaultRowReturnType:SPPostgresResultRowAsArray];
-        // [theResult setReturnDataAsStrings:YES]; //see tables above
-        
-        // Check for postgres errors - if information_schema is not accessible for some reasons
-        // omit adding procedures and functions
-        if(![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows] ) {
-
-            // Add the header row
-            [tables addObject:NSLocalizedString(@"PROCS & FUNCS",@"header for procs & funcs list")];
-            [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
-
-            for (NSDictionary *eachRow in theResult) {
-                id routineName = [eachRow objectForKey:@"routine_name"];
-                if (routineName && ![routineName isKindOfClass:[NSNull class]]) {
-                    [tables addObject:routineName];
-                } else {
-                    [tables addObject:@"<unknown>"];
-                }
-                if([[eachRow objectForKey:@"routine_type"] isNSNull] == NO ){
-                    if ([[eachRow objectForKey:@"routine_type"] isEqualToString:@"PROCEDURE"]) {
-                        [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeProc]];
-                    } else {
-                        [tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeFunc]];
-                    }
-                }
-            }
-        }
-
-		// Grab sequences for the current schema
-		NSString *seqQuery = [NSString stringWithFormat:@"SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = '%@' ORDER BY sequence_name", schemaToUse];
-		theResult = [postgresConnection queryString:seqQuery];
-
+		theResult = [postgresConnection queryString:[NSString stringWithFormat:
+			@"SELECT routine_name, routine_type FROM information_schema.routines "
+			@"WHERE routine_schema = %@ ORDER BY routine_name",
+			[schemaToUse tickQuotedString]]];
+		[theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		[theResult setReturnDataAsStrings:YES];
 		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
-			// Add the header row
+			[tables addObject:NSLocalizedString(@"PROCS & FUNCS", @"header for procs & funcs list")];
+			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
+			for (NSDictionary *eachRow in theResult) {
+				id routineName = [eachRow objectForKey:@"routine_name"];
+				if (!routineName || [routineName isKindOfClass:[NSNull class]]) continue;
+				[tables addObject:routineName];
+				NSString *routineType = [eachRow objectForKey:@"routine_type"];
+				if ([routineType isEqualToString:@"PROCEDURE"]) {
+					[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeProc]];
+				} else {
+					[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeFunc]];
+				}
+			}
+		}
+
+		// Sequences
+		theResult = [postgresConnection queryString:[NSString stringWithFormat:
+			@"SELECT sequence_name FROM information_schema.sequences "
+			@"WHERE sequence_schema = %@ ORDER BY sequence_name",
+			[schemaToUse tickQuotedString]]];
+		[theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		[theResult setReturnDataAsStrings:YES];
+		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
 			[tables addObject:NSLocalizedString(@"SEQUENCES", @"header for sequences list")];
 			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
-
 			for (NSDictionary *eachRow in theResult) {
 				id seqName = [eachRow objectForKey:@"sequence_name"];
-				if (seqName && ![seqName isKindOfClass:[NSNull class]]) {
-					[tables addObject:seqName];
-				} else {
-					[tables addObject:@"<unknown>"];
-				}
+				if (!seqName || [seqName isKindOfClass:[NSNull class]]) continue;
+				[tables addObject:seqName];
 				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeSequence]];
 			}
 		}
 
-		// Grab materialized views for the current schema
-		NSString *matViewQuery = [NSString stringWithFormat:@"SELECT matviewname FROM pg_matviews WHERE schemaname = '%@' ORDER BY matviewname", schemaToUse];
-		theResult = [postgresConnection queryString:matViewQuery];
-
+		// Materialized views
+		theResult = [postgresConnection queryString:[NSString stringWithFormat:
+			@"SELECT matviewname FROM pg_matviews WHERE schemaname = %@ ORDER BY matviewname",
+			[schemaToUse tickQuotedString]]];
+		[theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		[theResult setReturnDataAsStrings:YES];
 		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
-			// Add the header row
 			[tables addObject:NSLocalizedString(@"MATERIALIZED VIEWS", @"header for materialized views list")];
 			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
-
 			for (NSDictionary *eachRow in theResult) {
 				id mvName = [eachRow objectForKey:@"matviewname"];
-				if (mvName && ![mvName isKindOfClass:[NSNull class]]) {
-					[tables addObject:mvName];
-				} else {
-					[tables addObject:@"<unknown>"];
-				}
+				if (!mvName || [mvName isKindOfClass:[NSNull class]]) continue;
+				[tables addObject:mvName];
 				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeMaterializedView]];
 			}
 		}
 
-		// Grab domains for the current schema
-		NSString *domainQuery = [NSString stringWithFormat:@"SELECT domain_name FROM information_schema.domains WHERE domain_schema = '%@' ORDER BY domain_name", schemaToUse];
-		theResult = [postgresConnection queryString:domainQuery];
-
+		// Domains
+		theResult = [postgresConnection queryString:[NSString stringWithFormat:
+			@"SELECT domain_name FROM information_schema.domains "
+			@"WHERE domain_schema = %@ ORDER BY domain_name",
+			[schemaToUse tickQuotedString]]];
+		[theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		[theResult setReturnDataAsStrings:YES];
 		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
-			// Add the header row
 			[tables addObject:NSLocalizedString(@"DOMAINS", @"header for domains list")];
 			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
-
 			for (NSDictionary *eachRow in theResult) {
 				id domName = [eachRow objectForKey:@"domain_name"];
-				if (domName && ![domName isKindOfClass:[NSNull class]]) {
-					[tables addObject:domName];
-				} else {
-					[tables addObject:@"<unknown>"];
-				}
+				if (!domName || [domName isKindOfClass:[NSNull class]]) continue;
+				[tables addObject:domName];
 				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeDomain]];
 			}
 		}
 
-		// Grab custom types for the current schema
-		NSString *typeQuery = [NSString stringWithFormat:@"SELECT t.typname FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid WHERE n.nspname = '%@' AND t.typtype IN ('c', 'e') ORDER BY t.typname", schemaToUse];
-		theResult = [postgresConnection queryString:typeQuery];
-
+		// Custom types (composite and enum)
+		theResult = [postgresConnection queryString:[NSString stringWithFormat:
+			@"SELECT t.typname FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid "
+			@"WHERE n.nspname = %@ AND t.typtype IN ('c', 'e') ORDER BY t.typname",
+			[schemaToUse tickQuotedString]]];
+		[theResult setDefaultRowReturnType:SPPostgresResultRowAsDictionary];
+		[theResult setReturnDataAsStrings:YES];
 		if (![postgresConnection queryErrored] && theResult != nil && [theResult numberOfRows]) {
-			// Add the header row
 			[tables addObject:NSLocalizedString(@"TYPES", @"header for types list")];
 			[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeNone]];
-
 			for (NSDictionary *eachRow in theResult) {
 				id typeName = [eachRow objectForKey:@"typname"];
-				if (typeName && ![typeName isKindOfClass:[NSNull class]]) {
-					[tables addObject:typeName];
-				} else {
-					[tables addObject:@"<unknown>"];
-				}
+				if (!typeName || [typeName isKindOfClass:[NSNull class]]) continue;
+				[tables addObject:typeName];
 				[tableTypes addObject:[NSNumber numberWithInteger:SPTableTypeType]];
 			}
 		}
@@ -447,16 +389,6 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 		// Notify listeners that the query has finished
 		[[NSNotificationCenter defaultCenter] postNotificationOnMainThreadWithName:@"SPQueryHasBeenPerformed" object:tableDocumentInstance];
 	}
-
-	// Add the table headers even if no tables were found
-	if (tableListContainsViews) {
-		[tables insertObject:NSLocalizedString(@"TABLES & VIEWS",@"header for table & views list") atIndex:0];
-	} 
-	else {
-		[tables insertObject:NSLocalizedString(@"TABLES",@"header for table list") atIndex:0];
-	}
-	
-	[tableTypes insertObject:[NSNumber numberWithInteger:SPTableTypeNone] atIndex:0];
 
 	[[tablesListView onMainThread] reloadData];
 

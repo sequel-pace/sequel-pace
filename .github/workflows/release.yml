@@ -1,0 +1,40 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build and Publish Release
+    runs-on: macos-15
+    steps:
+    - name: Checkout the Git repository
+      uses: actions/checkout@v6
+
+    - name: Install PostgreSQL
+      run: |
+        brew install postgresql@17
+        brew link postgresql@17 --force
+
+    - name: Build Release
+      run: ./Scripts/build.sh release
+      env:
+        DEVELOPER_DIR: '/Applications/Xcode_16.2.app/Contents/Developer'
+
+    - name: Package DMG
+      run: ./Scripts/build.sh package
+      env:
+        DEVELOPER_DIR: '/Applications/Xcode_16.2.app/Contents/Developer'
+
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v2
+      with:
+        files: build/Sequel PAce.dmg
+        generate_release_notes: true
+        draft: false
+        prerelease: false

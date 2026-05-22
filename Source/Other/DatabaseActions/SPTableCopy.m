@@ -42,22 +42,13 @@
 
 - (BOOL)copyTable:(NSString *)tableName from:(NSString *)sourceDatabase to:(NSString *)targetDatabase
 {
-	NSString *createTableResult = [self _createTableStatementFor:tableName inDatabase:sourceDatabase];
-	
-	if ([createTableResult hasPrefix:@"CREATE TABLE"]) {
-		// Postgres specific copy structure
-		NSString *createTableStatement = [NSString stringWithFormat:@"CREATE TABLE %@.%@ (LIKE %@.%@ INCLUDING ALL)",
-										  [targetDatabase postgresQuotedIdentifier],
-										  [tableName postgresQuotedIdentifier],
-										  [sourceDatabase postgresQuotedIdentifier],
-										  [tableName postgresQuotedIdentifier]];
-
-		[connection queryString:createTableStatement];		
-		
-		return ![connection queryErrored];
-	}
-	
-	return NO;
+	NSString *createTableStatement = [NSString stringWithFormat:@"CREATE TABLE %@.%@ (LIKE %@.%@ INCLUDING ALL)",
+									  [targetDatabase postgresQuotedIdentifier],
+									  [tableName postgresQuotedIdentifier],
+									  [sourceDatabase postgresQuotedIdentifier],
+									  [tableName postgresQuotedIdentifier]];
+	[connection queryString:createTableStatement];
+	return ![connection queryErrored];
 }
 
 - (BOOL)copyTable:(NSString *)tableName from:(NSString *)sourceDatabase to:(NSString *)targetDatabase withContent:(BOOL)copyWithContent

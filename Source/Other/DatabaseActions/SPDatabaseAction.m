@@ -58,14 +58,12 @@
 	
 	NSMutableString *query = [NSMutableString stringWithFormat:@"CREATE DATABASE %@", [database postgresQuotedIdentifier]];
 	
-	if ([encoding length]) { // [nil length] == 0
-		// Postgres uses ENCODING and LC_COLLATE/LC_CTYPE.
-		// [query appendFormat:@" DEFAULT CHARACTER SET = %@",[encoding postgresQuotedIdentifier]];
-		// [query appendFormat:@" DEFAULT COLLATE = %@",[collation postgresQuotedIdentifier]];
+	if ([encoding length]) {
+		[query appendFormat:@" ENCODING %@", [encoding tickQuotedString]];
 	}
 
 	if ([collation length]) {
-		// [query appendFormat:@" DEFAULT COLLATE = %@",[collation postgresQuotedIdentifier]];
+		[query appendFormat:@" LC_COLLATE %@", [collation tickQuotedString]];
 	}
 	
 	[connection queryString:query];

@@ -103,6 +103,7 @@ print_usage() {
     echo "Commands:"
     echo "  debug     Build debug configuration"
     echo "  release   Build release configuration"
+    echo "  package   Build release and create signed .dmg"
     echo "  tests     Run unit tests"
     echo "  archive   Create distribution archive"
     echo "  clean     Clean build folder"
@@ -168,10 +169,12 @@ do_debug() {
     
     echo -e "${GREEN}✓ Debug build complete${NC}"
     echo -e "${BLUE}App location: ${BUILD_DIR}/Build/Products/Debug/${APP_NAME}${NC}"
-    
-    # Auto-launch the app after successful build
-    echo -e "${BLUE}Launching Sequel PAce...${NC}"
-    open "${BUILD_DIR}/Build/Products/Debug/${APP_NAME}"
+
+    # Auto-launch only in interactive shell (not CI/headless)
+    if [ -t 1 ]; then
+        echo -e "${BLUE}Launching Sequel PAce...${NC}"
+        open "${BUILD_DIR}/Build/Products/Debug/${APP_NAME}"
+    fi
 }
 
 # Command: release
@@ -233,6 +236,48 @@ do_archive() {
     echo -e "${BLUE}Archive location: $archive_path${NC}"
 }
 
+# Command: package — builds release, ad-hoc signs, and wraps in a DMG
+do_package() {
+    do_release
+
+    local APP_PATH="${BUILD_DIR}/Build/Products/Distribution/${APP_NAME}"
+    local DMG_PATH="${BUILD_DIR}/Sequel PAce.dmg"
+    local DMG_STAGING="${BUILD_DIR}/dmg_staging"
+
+    # Verify libpq embedding (must resolve via @rpath, not absolute Homebrew path)
+    echo -e "${BLUE}Verifying libpq embedding...${NC}"
+    local pq_ref
+    pq_ref=$(otool -L "${APP_PATH}/Contents/MacOS/Sequel PAce" 2>/dev/null | grep libpq | awk '{print $1}')
+    if [[ "$pq_ref" == /opt/* ]] || [[ "$pq_ref" == /usr/* ]]; then
+        echo -e "${YELLOW}⚠ libpq links to absolute Homebrew path: ${pq_ref}${NC}"
+        echo -e "${YELLOW}  Run Scripts/setup_libpq.sh to embed libpq into the framework first.${NC}"
+    elif [ -n "$pq_ref" ]; then
+        echo -e "${GREEN}✓ libpq embedded via: ${pq_ref}${NC}"
+    fi
+
+    # Ad-hoc codesign so Gatekeeper doesn't hard-block on first run
+    echo -e "${BLUE}Applying ad-hoc codesign...${NC}"
+    codesign --force --deep --sign - "${APP_PATH}"
+    echo -e "${GREEN}✓ Ad-hoc signature applied${NC}"
+
+    # Build DMG with drag-to-Applications layout
+    echo -e "${BLUE}Creating DMG...${NC}"
+    rm -rf "${DMG_STAGING}" "${DMG_PATH}"
+    mkdir -p "${DMG_STAGING}"
+    cp -R "${APP_PATH}" "${DMG_STAGING}/"
+    ln -s /Applications "${DMG_STAGING}/Applications"
+    hdiutil create \
+        -volname "Sequel PAce" \
+        -srcfolder "${DMG_STAGING}" \
+        -ov -format UDZO \
+        "${DMG_PATH}"
+    rm -rf "${DMG_STAGING}"
+
+    echo -e "${GREEN}✓ Package complete${NC}"
+    echo -e "${BLUE}DMG: ${DMG_PATH}${NC}"
+    echo -e "${YELLOW}  First launch: right-click the app → Open (unidentified developer)${NC}"
+}
+
 # Command: run
 do_run() {
     do_debug
@@ -249,6 +294,9 @@ case "$MODE" in
         ;;
     release)
         do_release
+        ;;
+    package)
+        do_package
         ;;
     tests)
         do_tests

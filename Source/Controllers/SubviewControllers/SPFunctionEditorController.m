@@ -57,7 +57,7 @@
 	if ((self = [super initWithWindowNibName:@"FunctionEditor"])) {
 		tableDocumentInstance = document;
 		connection = [document getConnection];
-		currentSchema = @"public";
+		currentSchema = [document.tablesListInstance selectedSchema] ?: @"public";
 		editingFunctionName = nil;
 		parameters = [[NSMutableArray alloc] init];
 		isEditMode = NO;

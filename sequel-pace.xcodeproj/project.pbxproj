@@ -209,8 +209,6 @@
 		50E217B618174280009D3580 /* SPFavoriteColorSupport.m in Sources */ = {isa = PBXBuildFile; fileRef = 50E217B518174280009D3580 /* SPFavoriteColorSupport.m */; };
 		50EA92641AB23EAD008D3C4F /* SPDatabaseCopy.m in Sources */ = {isa = PBXBuildFile; fileRef = 1198F5B21174EDD500670590 /* SPDatabaseCopy.m */; };
 		50EA92651AB23EC8008D3C4F /* SPDatabaseAction.m in Sources */ = {isa = PBXBuildFile; fileRef = 11B55BFD1189E3B2009EF465 /* SPDatabaseAction.m */; };
-		50EA92661AB23ED3008D3C4F /* SPMySQL.framework in Copy Frameworks */ = {isa = PBXBuildFile; fileRef = 584D876815140D3500F24774 /* SPMySQL.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
-		50EA92671AB23EE1008D3C4F /* SPMySQL.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 584D876815140D3500F24774 /* SPMySQL.framework */; };
 		50EA92681AB23EFC008D3C4F /* SPTableCopy.m in Sources */ = {isa = PBXBuildFile; fileRef = 1141A388117BBFF200126A28 /* SPTableCopy.m */; };
 		50EA926A1AB246B8008D3C4F /* SPDatabaseActionTest.m in Sources */ = {isa = PBXBuildFile; fileRef = 50EA92691AB246B8008D3C4F /* SPDatabaseActionTest.m */; };
 		50F530521ABCF66B002F2C1A /* resetTemplate.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 50F530511ABCF66B002F2C1A /* resetTemplate.pdf */; };
@@ -389,6 +387,13 @@
 		A2A868B92EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B32EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m */; };
 		A2A868BA2EDC06BF00FE08B1 /* SPPostgresConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B42EDC06BF00FE08B1 /* SPPostgresConnection.m */; };
 		A2A868BB2EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B52EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m */; };
+		912BC33FF52B41DF9010CB79 /* SPPostgresConnection.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B42EDC06BF00FE08B1 /* SPPostgresConnection.m */; };
+		22055987A61747DEB21212F9 /* SPPostgresResult.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B02EDC06BE00FE08B1 /* SPPostgresResult.m */; };
+		76E0EC4FDFA34DFF833CDA02 /* SPPostgresStreamingResult.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B12EDC06BE00FE08B1 /* SPPostgresStreamingResult.m */; };
+		BCE02095EC9A4721BA451E3A /* SPPostgresGeometryData.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B22EDC06BF00FE08B1 /* SPPostgresGeometryData.m */; };
+		1BF817975D8D40D5891DFD88 /* SPPostgresStreamingResultStore.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B32EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m */; };
+		927694781913475F82120AA0 /* SPPostgresFastStreamingResult.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B52EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m */; };
+		CE1234560000000000000001 /* SPDebugLogger.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */; };
 		A2E041332EDC084C000BD615 /* AppCenterCrashes in Frameworks */ = {isa = PBXBuildFile; productRef = 515D303E25BD7DE60021CF1E /* AppCenterCrashes */; };
 		A2E041342EDC084C000BD615 /* AppCenterAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 515D304025BD7DE60021CF1E /* AppCenterAnalytics */; };
 		B51D6B9E114C310C0074704E /* toolbar-switch-to-table-triggers.png in Resources */ = {isa = PBXBuildFile; fileRef = B51D6B9D114C310C0074704E /* toolbar-switch-to-table-triggers.png */; };
@@ -457,13 +462,6 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-		17D41AB12171157B00B1888D /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 584D876015140D3500F24774 /* SPPostgresFramework.xcodeproj */;
-			proxyType = 1;
-			remoteGlobalIDString = 8DC2EF4F0486A6940098B216;
-			remoteInfo = SPMySQL.framework;
-		};
 		17E5955214F304000054EE08 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 17E5954E14F304000054EE08 /* QueryKit.xcodeproj */;
@@ -478,26 +476,12 @@
 			remoteGlobalIDString = 17E5969E14F307CE0054EE08;
 			remoteInfo = Tests;
 		};
-		29B70BD51C805B2A00D1BE0C /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 584D876015140D3500F24774 /* SPPostgresFramework.xcodeproj */;
-			proxyType = 2;
-			remoteGlobalIDString = 507FF1D51BC0D7D300104523;
-			remoteInfo = "SPMySQL Unit Tests";
-		};
 		518402D824A3FF4F004693B0 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 2A37F4A9FDCFA73011CA2CEA /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 8D15AC270486D014006FF6A4;
 			remoteInfo = "Sequel Ace";
-		};
-		584D876715140D3500F24774 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 584D876015140D3500F24774 /* SPPostgresFramework.xcodeproj */;
-			proxyType = 2;
-			remoteGlobalIDString = 8DC2EF5B0486A6940098B216;
-			remoteInfo = SPMySQL.framework;
 		};
 		58B9096F11C3A462000826E5 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -522,7 +506,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
-				50EA92661AB23ED3008D3C4F /* SPMySQL.framework in Copy Frameworks */,
 			);
 			name = "Copy Frameworks";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1225,7 +1208,6 @@
 				51DCBEF0257134190098E303 /* libz.tbd in Frameworks */,
 				502D22151BA62FA5000D4CE7 /* Security.framework in Frameworks */,
 				1717FA43155831600065C036 /* libicucore.dylib in Frameworks */,
-				50EA92671AB23EE1008D3C4F /* SPMySQL.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2370,8 +2352,6 @@
 		584D876115140D3500F24774 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				584D876815140D3500F24774 /* SPMySQL.framework */,
-				29B70BD61C805B2A00D1BE0C /* SPMySQL Unit Tests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -2583,7 +2563,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				17D41AB22171157B00B1888D /* PBXTargetDependency */,
 			);
 			name = SequelAceTunnelAssistant;
 			productName = TunnelPassphraseRequester;
@@ -2704,20 +2683,6 @@
 			fileType = wrapper.cfbundle;
 			path = Tests.xctest;
 			remoteRef = 17E596A114F307CE0054EE08 /* PBXContainerItemProxy */;
-			sourceTree = BUILT_PRODUCTS_DIR;
-		};
-		29B70BD61C805B2A00D1BE0C /* SPMySQL Unit Tests.xctest */ = {
-			isa = PBXReferenceProxy;
-			fileType = wrapper.cfbundle;
-			path = "SPMySQL Unit Tests.xctest";
-			remoteRef = 29B70BD51C805B2A00D1BE0C /* PBXContainerItemProxy */;
-			sourceTree = BUILT_PRODUCTS_DIR;
-		};
-		584D876815140D3500F24774 /* SPMySQL.framework */ = {
-			isa = PBXReferenceProxy;
-			fileType = wrapper.framework;
-			path = SPMySQL.framework;
-			remoteRef = 584D876715140D3500F24774 /* PBXContainerItemProxy */;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
 /* End PBXReferenceProxy section */
@@ -2985,6 +2950,13 @@
 				1AE6C1CD25B07E9500880D73 /* SPFunctionsTests.m in Sources */,
 				1A9A40D525875EC9009F0E71 /* NSMutableArray-MultipleSort.m in Sources */,
 				8AEACED018AABDD8CBB42877 /* TableSortHelperTests.swift in Sources */,
+				912BC33FF52B41DF9010CB79 /* SPPostgresConnection.m in Sources (Tests) */,
+				22055987A61747DEB21212F9 /* SPPostgresResult.m in Sources (Tests) */,
+				76E0EC4FDFA34DFF833CDA02 /* SPPostgresStreamingResult.m in Sources (Tests) */,
+				BCE02095EC9A4721BA451E3A /* SPPostgresGeometryData.m in Sources (Tests) */,
+				1BF817975D8D40D5891DFD88 /* SPPostgresStreamingResultStore.m in Sources (Tests) */,
+				927694781913475F82120AA0 /* SPPostgresFastStreamingResult.m in Sources (Tests) */,
+				CE1234560000000000000001 /* SPDebugLogger.m in Sources (Tests) */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3230,11 +3202,6 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
-		17D41AB22171157B00B1888D /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = SPMySQL.framework;
-			targetProxy = 17D41AB12171157B00B1888D /* PBXContainerItemProxy */;
-		};
 		518402D924A3FF4F004693B0 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 8D15AC270486D014006FF6A4 /* Sequel PAce */;
@@ -3299,7 +3266,11 @@
 				GCC_MODEL_TUNING = G5;
 				GCC_OPTIMIZATION_LEVEL = 0;
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
-				HEADER_SEARCH_PATHS = "$CONFIGURATION_TEMP_DIR/sequel-pace.build/DerivedSources";
+				HEADER_SEARCH_PATHS = (
+					"$CONFIGURATION_TEMP_DIR/sequel-pace.build/DerivedSources",
+					"$(PROJECT_DIR)/Frameworks/SPPostgresFramework/Source/**",
+					"$(inherited)",
+				);
 				INFOPLIST_FILE = "Resources/Plists/Unit Tests-Info.plist";
 				INSTALL_PATH = "$(USER_LIBRARY_DIR)/Bundles";
 				LD_RUNPATH_SEARCH_PATHS = "$(SRCROOT)/Frameworks";
@@ -3334,7 +3305,11 @@
 				);
 				GCC_MODEL_TUNING = G5;
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
-				HEADER_SEARCH_PATHS = "$CONFIGURATION_TEMP_DIR/sequel-pace.build/DerivedSources";
+				HEADER_SEARCH_PATHS = (
+					"$CONFIGURATION_TEMP_DIR/sequel-pace.build/DerivedSources",
+					"$(PROJECT_DIR)/Frameworks/SPPostgresFramework/Source/**",
+					"$(inherited)",
+				);
 				INFOPLIST_FILE = "Resources/Plists/Unit Tests-Info.plist";
 				INSTALL_PATH = "$(USER_LIBRARY_DIR)/Bundles";
 				LD_RUNPATH_SEARCH_PATHS = "$(SRCROOT)/Frameworks";
@@ -3369,7 +3344,11 @@
 				);
 				GCC_MODEL_TUNING = G5;
 				GCC_PRECOMPILE_PREFIX_HEADER = YES;
-				HEADER_SEARCH_PATHS = "$CONFIGURATION_TEMP_DIR/sequel-pace.build/DerivedSources";
+				HEADER_SEARCH_PATHS = (
+					"$CONFIGURATION_TEMP_DIR/sequel-pace.build/DerivedSources",
+					"$(PROJECT_DIR)/Frameworks/SPPostgresFramework/Source/**",
+					"$(inherited)",
+				);
 				INFOPLIST_FILE = "Resources/Plists/Unit Tests-Info.plist";
 				INSTALL_PATH = "$(USER_LIBRARY_DIR)/Bundles";
 				LD_RUNPATH_SEARCH_PATHS = "$(SRCROOT)/Frameworks";

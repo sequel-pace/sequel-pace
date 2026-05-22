@@ -796,6 +796,10 @@ static NSComparisonResult compareStrings(NSString *s1, NSString *s2, void* conte
 	if ([item isKindOfClass:NSDictionaryClass]) {
 
 		NSArray *allKeys = [item allKeys];
+		NSArray *sortedKeys = [allKeys sortedArrayUsingFunction:compareStrings context:nil];
+
+		// Guard against race where model shrank between numberOfChildrenOfItem: and child:ofItem:
+		if (childIndex < 0 || (NSUInteger)childIndex >= [sortedKeys count]) return nil;
 
 		// If item contains more than 50 keys store the sort order and use the cached data to speed up
 		// the displaying of the tree data
@@ -806,7 +810,7 @@ static NSComparisonResult compareStrings(NSString *s1, NSString *s2, void* conte
 
 			// No parent return the child by using the normal sort routine
 			if(!parentObject || ![parentObject isKindOfClass:NSDictionaryClass])
-				return [item objectForKey:[[allKeys sortedArrayUsingFunction:compareStrings context:nil] safeObjectAtIndex:childIndex]];
+				return [item objectForKey:[sortedKeys safeObjectAtIndex:childIndex]];
 
 			// Get the parent key name for storing
 			id parentKeys = [parentObject allKeysForObject:item];
@@ -816,25 +820,27 @@ static NSComparisonResult compareStrings(NSString *s1, NSString *s2, void* conte
 
 				// For safety reasons
 				if(!itemRef)
-					return [item objectForKey:[[allKeys sortedArrayUsingFunction:compareStrings context:nil] safeObjectAtIndex:childIndex]];
+					return [item objectForKey:[sortedKeys safeObjectAtIndex:childIndex]];
 
 				// Not yet cached so do it
 				if(![cachedSortedKeys objectForKey:itemRef])
-					[cachedSortedKeys setObject:[allKeys sortedArrayUsingFunction:compareStrings context:nil] forKey:itemRef];
+					[cachedSortedKeys setObject:sortedKeys forKey:itemRef];
 
-				return [item objectForKey:[[cachedSortedKeys objectForKey:itemRef] safeObjectAtIndex:childIndex]];
-
+				NSArray *cachedKeys = [cachedSortedKeys objectForKey:itemRef];
+				if ((NSUInteger)childIndex >= [cachedKeys count]) return nil;
+				return [item objectForKey:[cachedKeys safeObjectAtIndex:childIndex]];
 			}
 
 			// If something failed return the child by using the normal way
-			return [item objectForKey:[[allKeys sortedArrayUsingFunction:compareStrings context:nil] safeObjectAtIndex:childIndex]];
+			return [item objectForKey:[sortedKeys safeObjectAtIndex:childIndex]];
 
 		} else {
-			return [item objectForKey:[[allKeys sortedArrayUsingFunction:compareStrings context:nil] safeObjectAtIndex:childIndex]];
+			return [item objectForKey:[sortedKeys safeObjectAtIndex:childIndex]];
 		}
 	}
-	else if ([item isKindOfClass:[NSArray class]]) 
+	else if ([item isKindOfClass:[NSArray class]])
 	{
+		if (childIndex < 0 || (NSUInteger)childIndex >= [(NSArray *)item count]) return nil;
 		return [item safeObjectAtIndex:childIndex];
 	}
 	return nil;

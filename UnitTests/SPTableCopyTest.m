@@ -48,30 +48,18 @@
 
 - (void)testCopyTableFromToWithData
 {
-	id mockResult = OCMClassMock([SPPostgresResult class]);
-
-	// PostgreSQL: Uses double quotes for identifiers
-	NSArray *resultArray = [[NSArray alloc] initWithObjects:@"", @"CREATE TABLE \"table_name\" ()", nil];
-
 	id mockConnection = OCMClassMock([SPPostgresConnection class]);
 
-	OCMExpect([mockResult numberOfRows]).andReturn(1);
-	OCMExpect([mockResult getRowAsArray]).andReturn(resultArray);
-
-	// PostgreSQL: Query pg_dump or construct CREATE TABLE from information_schema
-	OCMExpect([mockConnection queryString:@"SELECT 'CREATE TABLE \"table_name\" ()' AS create_statement"]).andReturn(mockResult);
-	OCMExpect([mockConnection queryString:@"CREATE TABLE \"target_db\".\"table_name\" ()"]);
+	OCMExpect([mockConnection queryString:@"CREATE TABLE \"target_db\".\"table_name\" (LIKE \"source_db\".\"table_name\" INCLUDING ALL)"]);
 	OCMExpect([mockConnection queryString:@"INSERT INTO \"target_db\".\"table_name\" SELECT * FROM \"source_db\".\"table_name\""]);
 	OCMStub([mockConnection queryErrored]).andReturn(NO);
 
 	{
 		SPTableCopy *tableCopy = [[SPTableCopy alloc] init];
-
 		[tableCopy setConnection:mockConnection];
 		[tableCopy copyTable:@"table_name" from:@"source_db" to:@"target_db" withContent:YES];
 	}
 
-	OCMVerifyAll(mockResult);
 	OCMVerifyAll(mockConnection);
 }
 
@@ -79,8 +67,7 @@
 {
 	id mockConnection = OCMStrictClassMock([SPPostgresConnection class]);
 
-	// PostgreSQL: Uses double quotes for identifiers
-	OCMExpect([mockConnection queryString:@"SELECT 'CREATE TABLE \"table_name\" ()' AS create_statement"]).andReturn(nil);
+	OCMExpect([mockConnection queryString:@"CREATE TABLE \"target_db\".\"table_name\" (LIKE \"source_db\".\"table_name\" INCLUDING ALL)"]);
 	OCMStub([mockConnection queryErrored]).andReturn(YES);
 	OCMStub([mockConnection lastErrorMessage]).andReturn(@"permission denied for table table_name");
 	OCMStub([mockConnection lastErrorID]).andReturn(42501);
