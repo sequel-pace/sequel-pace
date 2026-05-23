@@ -187,6 +187,9 @@ do_release() {
         -scheme "$SCHEME_RELEASE" \
         -configuration Distribution \
         -derivedDataPath "$BUILD_DIR" \
+        -destination "platform=macOS,arch=${ARCH}" \
+        ARCHS="${ARCH}" \
+        ONLY_ACTIVE_ARCH=YES \
         HEADER_SEARCH_PATHS="\$(inherited) ${PG_INCLUDE}" \
         LIBRARY_SEARCH_PATHS="\$(inherited) ${PG_LIB}" \
         OTHER_LDFLAGS="\$(inherited) -L${PG_LIB} -lpq" \
