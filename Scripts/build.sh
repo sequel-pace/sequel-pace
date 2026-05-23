@@ -263,12 +263,24 @@ do_package() {
     codesign --force --deep --sign - "${APP_PATH}"
     echo -e "${GREEN}✓ Ad-hoc signature applied${NC}"
 
-    # Build DMG with drag-to-Applications layout
+    # Build DMG with drag-to-Applications layout + install helper
     echo -e "${BLUE}Creating DMG...${NC}"
     rm -rf "${DMG_STAGING}" "${DMG_PATH}"
     mkdir -p "${DMG_STAGING}"
     cp -R "${APP_PATH}" "${DMG_STAGING}/"
     ln -s /Applications "${DMG_STAGING}/Applications"
+
+    # Install helper script — removes Gatekeeper quarantine automatically
+    cat > "${DMG_STAGING}/Install Sequel PAce.command" <<'INSTALL_EOF'
+#!/bin/bash
+cd "$(dirname "$0")"
+echo "Sequel PAce kuruluyor..."
+cp -R "Sequel PAce.app" /Applications/
+xattr -dr com.apple.quarantine "/Applications/Sequel PAce.app"
+echo "Kurulum tamamlandı. Sequel PAce uygulamanızdan başlatabilirsiniz."
+INSTALL_EOF
+    chmod +x "${DMG_STAGING}/Install Sequel PAce.command"
+
     hdiutil create \
         -volname "Sequel PAce" \
         -srcfolder "${DMG_STAGING}" \
@@ -278,7 +290,8 @@ do_package() {
 
     echo -e "${GREEN}✓ Package complete${NC}"
     echo -e "${BLUE}DMG: ${DMG_PATH}${NC}"
-    echo -e "${YELLOW}  First launch: right-click the app → Open (unidentified developer)${NC}"
+    echo -e "${YELLOW}  Kurulum: DMG içindeki 'Install Sequel PAce.command' scriptini çalıştır${NC}"
+    echo -e "${YELLOW}  Ya da Terminal'de: xattr -dr com.apple.quarantine \"/Applications/Sequel PAce.app\"${NC}"
 }
 
 # Command: run
