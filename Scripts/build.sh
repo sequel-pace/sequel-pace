@@ -351,10 +351,10 @@ do_package() {
     cat > "${DMG_STAGING}/Install Sequel PAce.command" <<'INSTALL_EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
-echo "Sequel PAce kuruluyor..."
+echo "Installing Sequel PAce..."
 cp -R "Sequel PAce.app" /Applications/
 xattr -dr com.apple.quarantine "/Applications/Sequel PAce.app"
-echo "Kurulum tamamlandı. Sequel PAce uygulamanızdan başlatabilirsiniz."
+echo "Done. Launch Sequel PAce from your Applications folder."
 INSTALL_EOF
     chmod +x "${DMG_STAGING}/Install Sequel PAce.command"
 
@@ -367,8 +367,8 @@ INSTALL_EOF
 
     echo -e "${GREEN}✓ Package complete${NC}"
     echo -e "${BLUE}DMG: ${DMG_PATH}${NC}"
-    echo -e "${YELLOW}  Kurulum: DMG içindeki 'Install Sequel PAce.command' scriptini çalıştır${NC}"
-    echo -e "${YELLOW}  Ya da Terminal'de: xattr -dr com.apple.quarantine \"/Applications/Sequel PAce.app\"${NC}"
+    echo -e "${YELLOW}  Install: run 'Install Sequel PAce.command' inside the DMG${NC}"
+    echo -e "${YELLOW}  Or in Terminal: xattr -dr com.apple.quarantine \"/Applications/Sequel PAce.app\"${NC}"
 }
 
 # Command: run
