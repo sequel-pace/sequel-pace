@@ -274,10 +274,11 @@ do_package() {
     # NEVER hardcode team ID, email, or certificate names here.
     local SIGN_ID="${CODE_SIGN_IDENTITY:-}"
     if [ -z "$SIGN_ID" ]; then
-        # Auto-detect a Developer ID Application cert from the login keychain
+        # Auto-detect: use SHA-1 fingerprint to avoid "ambiguous" error when
+        # the same cert name appears multiple times in the keychain.
         SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
             | grep "Developer ID Application" | head -1 \
-            | sed 's/.*"\(.*\)"/\1/' | xargs)
+            | awk '{print $2}')
     fi
 
     if [ -n "$SIGN_ID" ]; then
