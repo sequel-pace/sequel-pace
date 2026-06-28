@@ -69,7 +69,7 @@
 
     NSLog(@"[PG-DEBUG] Connection successful!");
     isConnected = YES;
-    
+
     // Get server version
     int version = PQserverVersion(connection);
     serverMajorVersion = version / 10000;
@@ -77,6 +77,7 @@
     serverReleaseVersion = version % 100;
     serverVersion = [NSString stringWithFormat:@"%d.%d.%d", (int)serverMajorVersion, (int)serverMinorVersion, (int)serverReleaseVersion];
 
+    [self setSearchPathToSchema:@"public"];
     return YES;
 }
 
@@ -132,6 +133,10 @@
     } else {
         lastErrorMessage = nil;
     }
+
+    // Cache SQLSTATE so lastSqlstate can return the real error code from the last query
+    const char *sqlstate = PQresultErrorField(res, PG_DIAG_SQLSTATE);
+    lastSqlstateString = sqlstate ? [NSString stringWithUTF8String:sqlstate] : @"00000";
 
     // For synchronous queries, immediately populate the data storage so callers
     // can iterate the results without explicitly calling startDownload.
@@ -189,14 +194,14 @@
         string = [value description];
     }
 
-    if (!isConnected) return [NSString stringWithFormat:@"'%@'", string]; // Fallback
+    if (!isConnected || !connection) return [NSString stringWithFormat:@"'%@'", string]; // Fallback
 
-    char *escaped = malloc(string.length * 2 + 1);
-    int error;
-    PQescapeStringConn(connection, escaped, [string UTF8String], string.length, &error);
-    NSString *result = [NSString stringWithFormat:@"'%s'", escaped];
-    free(escaped);
-    return result;
+    const char *utf8String = [string UTF8String];
+    char *escaped = PQescapeLiteral(connection, utf8String, strlen(utf8String));
+    if (!escaped) return [NSString stringWithFormat:@"'%@'", string];
+    NSString *result = [NSString stringWithUTF8String:escaped];
+    PQfreemem(escaped);
+    return result ?: [NSString stringWithFormat:@"'%@'", string];
 }
 
 - (id)delegate { return nil; }
@@ -378,6 +383,10 @@
     ExecStatusType status = result ? PQresultStatus(result) : (ExecStatusType)-1;
     NSLog(@"[PG-DEBUG] PQntuples=%d, PQnfields=%d, status=%d (TUPLES_OK=%d)", rowCount, fieldCount, status, PGRES_TUPLES_OK);
 
+    // Cache SQLSTATE before any early return
+    const char *sqlstateDirect = result ? PQresultErrorField(result, PG_DIAG_SQLSTATE) : NULL;
+    lastSqlstateString = sqlstateDirect ? [NSString stringWithUTF8String:sqlstateDirect] : @"00000";
+
     if (!result || status != PGRES_TUPLES_OK) {
         NSLog(@"[PG-DEBUG] Query error: %s", PQerrorMessage(connection));
         if (result) {
@@ -399,12 +408,10 @@
 }
 
 - (NSString *)lastSqlstate {
-    if (!connection) return nil;
-    char *sqlstate = PQresultErrorField(PQexec(connection, "SELECT 1"), PG_DIAG_SQLSTATE);
-    if (sqlstate) {
-        return [NSString stringWithUTF8String:sqlstate];
-    }
-    return @"00000"; // Success state
+    // Returns the SQLSTATE cached from the most recent query execution.
+    // Previously this ran a throwaway SELECT 1 on every call, which always returned
+    // success (00000) and leaked a PGresult. Now we just return the cached value.
+    return lastSqlstateString ?: @"00000";
 }
 
 - (NSUInteger)rowsAffectedByLastQuery {
@@ -495,13 +502,23 @@
     return isConnected && connection && PQstatus(connection) == CONNECTION_OK;
 }
 
+- (BOOL)setSearchPathToSchema:(NSString *)schema {
+    if (!isConnected || !connection || !schema.length) return NO;
+    NSString *query = [NSString stringWithFormat:@"SET search_path TO \"%@\", public", schema];
+    PGresult *res = PQexec(connection, [query UTF8String]);
+    BOOL ok = res && PQresultStatus(res) == PGRES_COMMAND_OK;
+    if (res) PQclear(res);
+    return ok;
+}
+
 - (NSArray *)tablesFromDatabase:(NSString *)databaseName {
     if (!connection || !databaseName) return @[];
     
-    // Query PostgreSQL information_schema for tables in the specified schema/database
+    // Query PostgreSQL information_schema for tables in the specified database.
+    // Uses escapeAndQuoteString: to prevent injection; compares table_catalog (database name) as a literal.
     NSString *query = [NSString stringWithFormat:
-        @"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = '%@'",
-        databaseName];
+        @"SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_catalog = %@",
+        [self escapeAndQuoteString:databaseName]];
     
     SPPostgresResult *result = [self queryString:query];
     if (!result || [self queryErrored]) {

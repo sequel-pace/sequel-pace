@@ -294,27 +294,75 @@
 // Map PostgreSQL OID to type name
 - (NSString *)typeNameForOid:(Oid)oid {
     switch (oid) {
-        case 16: return @"boolean";
-        case 17: return @"bytea";
-        case 20: return @"bigint";
-        case 21: return @"smallint";
-        case 23: return @"integer";
-        case 25: return @"text";
-        case 700: return @"real";
-        case 701: return @"double precision";
+        // Boolean
+        case 16:   return @"boolean";
+        // Binary
+        case 17:   return @"bytea";
+        // Integers
+        case 20:   return @"bigint";
+        case 21:   return @"smallint";
+        case 23:   return @"integer";
+        case 26:   return @"oid";
+        // Floats
+        case 700:  return @"real";
+        case 701:  return @"double precision";
+        case 1700: return @"numeric";
+        // Text
+        case 25:   return @"text";
         case 1042: return @"char";
         case 1043: return @"varchar";
+        case 19:   return @"name";
+        // JSON
+        case 114:  return @"json";
+        case 3802: return @"jsonb";
+        // Date/time
         case 1082: return @"date";
         case 1083: return @"time";
+        case 1266: return @"timetz";
         case 1114: return @"timestamp";
         case 1184: return @"timestamptz";
-        case 1700: return @"numeric";
+        case 1186: return @"interval";
+        // UUID
         case 2950: return @"uuid";
-        case 114: return @"json";
-        case 3802: return @"jsonb";
+        // Network
+        case 650:  return @"cidr";
+        case 869:  return @"inet";
+        case 829:  return @"macaddr";
+        // Bit strings
+        case 1560: return @"bit";
+        case 1562: return @"varbit";
+        // Geometric
+        case 600:  return @"point";
+        case 601:  return @"lseg";
+        case 602:  return @"path";
+        case 603:  return @"box";
+        case 604:  return @"polygon";
+        case 628:  return @"line";
+        case 718:  return @"circle";
+        // Text search
+        case 3614: return @"tsvector";
+        case 3615: return @"tsquery";
+        // XML
+        case 142:  return @"xml";
+        // Arrays of common types
+        case 1000: return @"boolean[]";
+        case 1001: return @"bytea[]";
+        case 1005: return @"smallint[]";
         case 1007: return @"integer[]";
+        case 1016: return @"bigint[]";
         case 1009: return @"text[]";
-        default: return @"unknown";
+        case 1014: return @"char[]";
+        case 1015: return @"varchar[]";
+        case 1021: return @"real[]";
+        case 1022: return @"double precision[]";
+        case 199:  return @"json[]";
+        case 3807: return @"jsonb[]";
+        case 1182: return @"date[]";
+        case 1183: return @"time[]";
+        case 1115: return @"timestamp[]";
+        case 1185: return @"timestamptz[]";
+        case 2951: return @"uuid[]";
+        default:   return @"unknown";
     }
 }
 
@@ -323,27 +371,41 @@
     switch (oid) {
         // Integers
         case 20: case 21: case 23: case 26: // bigint, smallint, int, oid
-        case 1005: case 1007: case 1016:    // int arrays
+        case 1005: case 1007: case 1016:    // int2[], int4[], int8[] arrays
             return @"integer";
-        // Floats
+        // Floats / numeric
         case 700: case 701: case 1700:      // real, double, numeric
+        case 1021: case 1022:               // real[], double[]
             return @"float";
         // Strings
-        case 1042: case 1043:               // char, varchar
+        case 19: case 1042: case 1043:      // name, char, varchar
+        case 142:                           // xml
+        case 650: case 869: case 829:       // cidr, inet, macaddr
+        case 1560: case 1562:               // bit, varbit
             return @"string";
-        // Text data
+        // Text data (multi-line / large)
         case 25:                            // text
-        case 114: case 3802:                // json, jsonb
+        case 114: case 3802:               // json, jsonb
+        case 3614: case 3615:              // tsvector, tsquery
             return @"textdata";
         // Binary
-        case 17:                            // bytea
+        case 17: case 1001:                 // bytea, bytea[]
             return @"blobdata";
         // Boolean
-        case 16:                            // boolean
+        case 16: case 1000:                 // boolean, boolean[]
             return @"bit";
         // Date/time
-        case 1082: case 1083: case 1114: case 1184: // date, time, timestamp
+        case 1082: case 1083: case 1266:    // date, time, timetz
+        case 1114: case 1184:               // timestamp, timestamptz
+        case 1186:                          // interval
+        case 1182: case 1183: case 1115: case 1185: // date[], time[], timestamp[], timestamptz[]
             return @"date";
+        // UUID
+        case 2950: case 2951:               // uuid, uuid[]
+            return @"string";
+        // Geometric types
+        case 600: case 601: case 602: case 603: case 604: case 628: case 718:
+            return @"string";
         default:
             return @"string";
     }

@@ -77,37 +77,19 @@
 - (BOOL)copyTables:(NSArray *)tablesArray from:(NSString *)sourceDatabase to:(NSString *)targetDatabase withContent:(BOOL)copyWithContent
 {
 	BOOL success = YES;
-	
-	// Disable foreign key checks
-	[connection queryString:@"/*!32352 SET foreign_key_checks=0 */"];
-	
-	if ([connection queryErrored]) {
-		success = NO;
-	}
-	
-	// Disable auto-id creation for '0' values
-	[connection queryString:@"/*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */"];
-	
-	if([connection queryErrored]) {
-		success = NO;
-	}
-	
-	for (NSString *tableName in tablesArray) 
+
+	// PostgreSQL FK constraints are enforced at the server level; there's no session-level
+	// foreign_key_checks toggle like MySQL. The MySQL /*!...*/ conditional comments were
+	// silently no-ops in PG (treated as block comments). Table copies that violate active FK
+	// constraints will produce an error per table — handle it via DEFERRABLE constraints
+	// or copy in dependency order if needed.
+	for (NSString *tableName in tablesArray)
 	{
 		if (![self copyTable:tableName from:sourceDatabase to:targetDatabase withContent:copyWithContent]) {
 			success = NO;
 		}
 	}
-	
-	// Enable foreign key checks
-	[connection queryString:@"/*!32352 SET foreign_key_checks=1 */"];
-	
-	if ([connection queryErrored]) {
-		success = NO;
-	}
-	
-	// PostgreSQL doesn't use SQL_MODE - no restoration needed
-	
+
 	return success;
 }
 

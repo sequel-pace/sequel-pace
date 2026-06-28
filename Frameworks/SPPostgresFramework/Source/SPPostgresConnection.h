@@ -60,6 +60,7 @@ typedef NS_ENUM(NSInteger, SPPostgresConnectionLostDecision) {
     NSString *storedEncoding;
     BOOL queryWasCancelled;
     NSUInteger lastAffectedRows;
+    NSString *lastSqlstateString;
 }
 
 @property (readonly) BOOL isConnected;
@@ -111,6 +112,7 @@ typedef NS_ENUM(NSInteger, SPPostgresConnectionLostDecision) {
 - (unsigned long long)lastInsertID;
 - (BOOL)isConnected;
 - (NSArray *)tablesFromDatabase:(NSString *)database;
+- (BOOL)setSearchPathToSchema:(NSString *)schema;
 
 // Connection management methods
 - (NSUInteger)port;
