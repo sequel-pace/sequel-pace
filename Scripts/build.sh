@@ -239,13 +239,25 @@ do_archive() {
     echo -e "${BLUE}Archive location: $archive_path${NC}"
 }
 
-# Command: package — builds release, ad-hoc signs, and wraps in a DMG
+# Command: package — builds release, signs (Developer ID or ad-hoc), and wraps in a DMG
+#
+# Signing identity is read EXCLUSIVELY from environment variables — never hardcoded:
+#   CODE_SIGN_IDENTITY  — full cert name, e.g. "Developer ID Application: Name (TEAMID)"
+#                         auto-detected via `security find-identity` if unset but a
+#                         Developer ID cert is in the login keychain.
+#   NOTARIZATION_APPLE_ID  — Apple ID for notarytool (optional)
+#   NOTARIZATION_PASSWORD  — app-specific password for notarytool (optional)
+#   NOTARIZATION_TEAM_ID   — team ID for notarytool (optional)
+#
+# Falls back to ad-hoc signing when no Developer ID cert is available.
 do_package() {
     do_release
 
     local APP_PATH="${BUILD_DIR}/Build/Products/Distribution/${APP_NAME}"
     local DMG_PATH="${BUILD_DIR}/Sequel PAce.dmg"
     local DMG_STAGING="${BUILD_DIR}/dmg_staging"
+    local ENTITLEMENTS_APP="Entitlements/Sequel PAce.entitlements"
+    local ENTITLEMENTS_HELPER="Entitlements/SequelAceTunnelAssistant.entitlements"
 
     # Verify libpq embedding (must resolve via @rpath, not absolute Homebrew path)
     echo -e "${BLUE}Verifying libpq embedding...${NC}"
@@ -258,10 +270,74 @@ do_package() {
         echo -e "${GREEN}✓ libpq embedded via: ${pq_ref}${NC}"
     fi
 
-    # Ad-hoc codesign so Gatekeeper doesn't hard-block on first run
-    echo -e "${BLUE}Applying ad-hoc codesign...${NC}"
-    codesign --force --deep --sign - "${APP_PATH}"
-    echo -e "${GREEN}✓ Ad-hoc signature applied${NC}"
+    # Resolve signing identity from environment or auto-detect from keychain.
+    # NEVER hardcode team ID, email, or certificate names here.
+    local SIGN_ID="${CODE_SIGN_IDENTITY:-}"
+    if [ -z "$SIGN_ID" ]; then
+        # Auto-detect a Developer ID Application cert from the login keychain
+        SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null \
+            | grep "Developer ID Application" | head -1 \
+            | sed 's/.*"\(.*\)"/\1/' | xargs)
+    fi
+
+    if [ -n "$SIGN_ID" ]; then
+        echo -e "${BLUE}Signing with Developer ID: ${SIGN_ID}${NC}"
+
+        # Sign inside-out: frameworks/dylibs first, then helper, then main app.
+        # --deep is NOT used for Developer ID (Apple recommends explicit ordering).
+        local CODESIGN_FLAGS="--force --options runtime --timestamp --sign"
+
+        # Sign embedded dylibs inside PostgreSQL.framework
+        find "${APP_PATH}/Contents/Frameworks/PostgreSQL.framework" \
+            -name "*.dylib" -o -name "libpq*" 2>/dev/null | while read f; do
+            codesign ${CODESIGN_FLAGS} "${SIGN_ID}" "$f"
+        done
+        # Sign framework bundles
+        for fw in PostgreSQL QueryKit ShortcutRecorder; do
+            local fw_path="${APP_PATH}/Contents/Frameworks/${fw}.framework"
+            [ -d "$fw_path" ] && codesign ${CODESIGN_FLAGS} "${SIGN_ID}" "$fw_path"
+        done
+        # Sign SSH tunnel helper
+        local helper="${APP_PATH}/Contents/Resources/SequelAceTunnelAssistant"
+        [ -f "$helper" ] && codesign ${CODESIGN_FLAGS} "${SIGN_ID}" \
+            --entitlements "${ENTITLEMENTS_HELPER}" "$helper"
+        # Sign main app with entitlements
+        codesign ${CODESIGN_FLAGS} "${SIGN_ID}" \
+            --entitlements "${ENTITLEMENTS_APP}" "${APP_PATH}"
+
+        echo -e "${GREEN}✓ Developer ID signature applied${NC}"
+
+        # Verify
+        codesign --verify --deep --strict --verbose=0 "${APP_PATH}" \
+            && echo -e "${GREEN}✓ Signature verified${NC}" \
+            || echo -e "${YELLOW}⚠ Signature verification had warnings${NC}"
+
+        # Notarize if credentials are provided in environment (never hardcoded)
+        if [ -n "${NOTARIZATION_APPLE_ID:-}" ] && \
+           [ -n "${NOTARIZATION_PASSWORD:-}" ] && \
+           [ -n "${NOTARIZATION_TEAM_ID:-}" ]; then
+            echo -e "${BLUE}Notarizing...${NC}"
+            # Create a temporary zip for notarytool submission
+            local ZIP_PATH="${BUILD_DIR}/sequel-pace-notarize.zip"
+            ditto -c -k --keepParent "${APP_PATH}" "${ZIP_PATH}"
+            xcrun notarytool submit "${ZIP_PATH}" \
+                --apple-id "${NOTARIZATION_APPLE_ID}" \
+                --password "${NOTARIZATION_PASSWORD}" \
+                --team-id "${NOTARIZATION_TEAM_ID}" \
+                --wait \
+                && xcrun stapler staple "${APP_PATH}" \
+                && echo -e "${GREEN}✓ Notarization complete and stapled${NC}" \
+                || echo -e "${YELLOW}⚠ Notarization failed — DMG will still work with the install script${NC}"
+            rm -f "${ZIP_PATH}"
+        else
+            echo -e "${YELLOW}ℹ Notarization skipped — set NOTARIZATION_APPLE_ID, NOTARIZATION_PASSWORD, NOTARIZATION_TEAM_ID to enable${NC}"
+        fi
+    else
+        echo -e "${YELLOW}ℹ No Developer ID cert found — applying ad-hoc codesign${NC}"
+        echo -e "${YELLOW}  Set CODE_SIGN_IDENTITY env var to use Developer ID signing${NC}"
+        codesign --force --deep --sign - "${APP_PATH}"
+        echo -e "${GREEN}✓ Ad-hoc signature applied${NC}"
+    fi
 
     # Build DMG with drag-to-Applications layout + install helper
     echo -e "${BLUE}Creating DMG...${NC}"
