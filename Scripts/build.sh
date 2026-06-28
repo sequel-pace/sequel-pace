@@ -396,18 +396,18 @@ tell application "Finder"
         set current view of container window to icon view
         set toolbar visible of container window to false
         set statusbar visible of container window to false
-        set the bounds of container window to {200, 100, 1000, 600}
+        set the bounds of container window to {160, 80, 980, 600}
         set viewOptions to the icon view options of container window
         set arrangement of viewOptions to not arranged
-        set icon size of viewOptions to 100
-        set text size of viewOptions to 12
+        set icon size of viewOptions to 96
+        set text size of viewOptions to 11
         set background picture of viewOptions to file ".background:background.png"
-        -- App icon: left side
-        set position of item "Sequel PAce.app" of container window to {200, 290}
-        -- Applications alias: right of arrow
-        set position of item "Applications" of container window to {560, 290}
-        -- Install script: bottom right
-        set position of item "Install Sequel PAce.command" of container window to {560, 420}
+        -- App icon: left zone (Option A — drag)
+        set position of item "Sequel PAce.app" of container window to {200, 300}
+        -- Applications alias: left zone target
+        set position of item "Applications" of container window to {340, 300}
+        -- Install script: right zone (Option B — recommended)
+        set position of item "Install Sequel PAce.command" of container window to {615, 310}
         close
         open
         update without registering applications
