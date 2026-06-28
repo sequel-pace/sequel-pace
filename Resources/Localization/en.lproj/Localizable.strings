@@ -2881,8 +2881,8 @@
 /* Table Structure : Encoding dropdown : server marker tooltip */
 "This is the default encoding of this server." = "This is the default encoding of this server.";
 
-/* This table currently does not support relations. Only tables that use the InnoDB storage engine support them. */
-"This table currently does not support relations. Only tables that use the InnoDB storage engine support them." = "This table currently does not support relations. Only tables that use the InnoDB storage engine support them.";
+/* This table currently does not support relations. */
+"This table currently does not support relations. Only tables that use the InnoDB storage engine support them." = "This table currently does not support relations. PostgreSQL supports foreign key relations on regular tables.";
 
 /* user has no hosts informative message */
 "This user doesn't have any hosts associated with it. It will be deleted unless one is added" = "This user doesn't have any hosts associated with it. It will be deleted unless one is added";

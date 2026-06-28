@@ -1124,7 +1124,7 @@ Gw
                             <items>
                                 <menuItem title="Never use additional queries for table row counts" id="1473"/>
                                 <menuItem title="Only use additional queries for small tables" state="on" tag="1" id="1474"/>
-                                <menuItem title="Always get accurate row counts (slow for InnoDB)" tag="2" id="1475"/>
+                                <menuItem title="Always get accurate row counts (may be slow for large tables)" tag="2" id="1475"/>
                             </items>
                         </menu>
                     </popUpButtonCell>

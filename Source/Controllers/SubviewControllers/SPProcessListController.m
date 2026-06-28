@@ -243,7 +243,7 @@ static NSString * const SPKillIdKey   = @"SPKillId";
     [panel beginSheetModalForWindow:[self window] completionHandler:^(NSInteger returnCode) {
         if (returnCode == NSModalResponseOK) {
             if ([self->processesFiltered count] > 0) {
-                NSMutableString *processesString = [NSMutableString stringWithFormat:@"# MySQL server processes for %@\n\n", [[SPAppDelegate frontDocument] host]];
+                NSMutableString *processesString = [NSMutableString stringWithFormat:@"# PostgreSQL server processes for %@\n\n", [[SPAppDelegate frontDocument] host]];
                 
                 for (NSDictionary *process in self->processesFiltered)
                 {
