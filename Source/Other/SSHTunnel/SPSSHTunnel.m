@@ -602,14 +602,15 @@ static unsigned short getRandomPort(void);
 
 		// On tunnel close, clean up, ready for re-use if the delegate reconnects.
 
-		// Close the file handle to stop pending notifications before removing observer
-		if (standardError) {
-			[[standardError fileHandleForReading] closeFile];
-		}
-
+		// Remove the observer BEFORE closing the file handle to prevent a final
+		// spurious notification from firing standardErrorHandler: on an already-closing handle.
 		[[NSNotificationCenter defaultCenter] removeObserver:self
 		                                                name:NSFileHandleDataAvailableNotification
 		                                              object:[standardError fileHandleForReading]];
+
+		if (standardError) {
+			[[standardError fileHandleForReading] closeFile];
+		}
 
 		// Release the pipe
 		standardError = nil;

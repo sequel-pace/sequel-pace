@@ -79,9 +79,10 @@
 {
 	[[NSThread currentThread] setName:name];
 	
-	void (*msgsend)(id, SEL, id) = (void (*)(id, SEL, id)) objc_msgSend; //hint for the compiler
-	
-	msgsend(object,selector,argument); // TODO: this leaks
+	// Use IMP lookup instead of raw objc_msgSend cast to avoid ARC retain/release concerns.
+	IMP imp = [object methodForSelector:selector];
+	void (*func)(id, SEL, id) = (void (*)(id, SEL, id))imp;
+	func(object, selector, argument);
 }
 
 - (void)dealloc
