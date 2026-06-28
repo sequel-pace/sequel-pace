@@ -158,6 +158,9 @@
 		1AF0DA8B259F657200961974 /* SPPointerArrayAdditions.m in Sources */ = {isa = PBXBuildFile; fileRef = 1AF0DA7E259F5D8C00961974 /* SPPointerArrayAdditions.m */; };
 		1AF5A261250AC401009885DF /* SPBracketHighlighter.m in Sources */ = {isa = PBXBuildFile; fileRef = 1AF5A25E250AC401009885DF /* SPBracketHighlighter.m */; };
 		1AF5A262250AC401009885DF /* SPBrackets.m in Sources */ = {isa = PBXBuildFile; fileRef = 1AF5A25F250AC401009885DF /* SPBrackets.m */; };
+		1BF817975D8D40D5891DFD88 /* SPPostgresStreamingResultStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B32EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m */; };
+		209420D48F1D0AC1905432B3 /* SPDatabaseDocument+Scripting.m in Sources */ = {isa = PBXBuildFile; fileRef = 6266E564DDC090F43B7F92E5 /* SPDatabaseDocument+Scripting.m */; };
+		22055987A61747DEB21212F9 /* SPPostgresResult.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B02EDC06BE00FE08B1 /* SPPostgresResult.m */; };
 		265446DF24A1616900376B48 /* libz.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 38C613721C8977E600B3B6EF /* libz.tbd */; };
 		296DC89F0F8FD336002A3258 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 296DC89E0F8FD336002A3258 /* WebKit.framework */; };
 		296DC8B60F909194002A3258 /* MGTemplateEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 296DC8A70F909194002A3258 /* MGTemplateEngine.m */; };
@@ -170,6 +173,7 @@
 		296DC8BF0F9091DF002A3258 /* libicucore.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = 296DC8BE0F9091DF002A3258 /* libicucore.dylib */; };
 		29A1B7E50FD1293A000B88E8 /* SPPrintAccessory.m in Sources */ = {isa = PBXBuildFile; fileRef = 29A1B7E40FD1293A000B88E8 /* SPPrintAccessory.m */; };
 		29FA88231114619E00D1AF3D /* SPTableTriggers.m in Sources */ = {isa = PBXBuildFile; fileRef = 29FA88221114619E00D1AF3D /* SPTableTriggers.m */; };
+		36FCEE4EA8738B71DAC3AFF3 /* SPDatabaseDocument+State.m in Sources */ = {isa = PBXBuildFile; fileRef = D2988D3D1ECFD02415480941 /* SPDatabaseDocument+State.m */; };
 		380F4EF50FC0B68F00B0BFD7 /* SPStringAdditionsTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 380F4EF40FC0B68F00B0BFD7 /* SPStringAdditionsTests.m */; };
 		384582C40FB95FF800DDACB6 /* func-small.png in Resources */ = {isa = PBXBuildFile; fileRef = 384582C30FB95FF800DDACB6 /* func-small.png */; };
 		384582C70FB9603600DDACB6 /* proc-small.png in Resources */ = {isa = PBXBuildFile; fileRef = 384582C60FB9603600DDACB6 /* proc-small.png */; };
@@ -178,6 +182,7 @@
 		3E242D4F20FEB44D0015470D /* button_bar_spacer_dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 3E242D4B20FEB44D0015470D /* button_bar_spacer_dark.png */; };
 		3E242D5020FEB44D0015470D /* button_bar_spacer_dark@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 3E242D4E20FEB44D0015470D /* button_bar_spacer_dark@2x.png */; };
 		44011FFBC7DF57126761313F /* SQLitePinnedTableManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 44011DFD0DC2836DB08A0619 /* SQLitePinnedTableManager.swift */; };
+		4998160F5B96F66ED6C5C0BC /* SPDatabaseDocument+Menu.m in Sources */ = {isa = PBXBuildFile; fileRef = 2CF0BEEFF8DE2368B6FA7F15 /* SPDatabaseDocument+Menu.m */; };
 		4D90B79A101E0CDF00D116A1 /* SPUserManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 4D90B799101E0CDF00D116A1 /* SPUserManager.m */; };
 		4D90B79E101E0CF200D116A1 /* SPUserManager.xcdatamodel in Sources */ = {isa = PBXBuildFile; fileRef = 4D90B79B101E0CF200D116A1 /* SPUserManager.xcdatamodel */; };
 		4D90B79F101E0CF200D116A1 /* SPUserMO.m in Sources */ = {isa = PBXBuildFile; fileRef = 4D90B79D101E0CF200D116A1 /* SPUserMO.m */; };
@@ -328,7 +333,6 @@
 		58D2E22F101222870063EF1D /* link-arrow-highlighted-clicked.png in Resources */ = {isa = PBXBuildFile; fileRef = 58D2E22C101222870063EF1D /* link-arrow-highlighted-clicked.png */; };
 		58D2E230101222870063EF1D /* link-arrow.png in Resources */ = {isa = PBXBuildFile; fileRef = 58D2E22D101222870063EF1D /* link-arrow.png */; };
 		58DA8863103E15B5000B98DF /* SPLogger.m in Sources */ = {isa = PBXBuildFile; fileRef = 58DA8862103E15B5000B98DF /* SPLogger.m */; };
-		D3BGL0GG103E15B50001A2B3 /* SPDebugLogger.m in Sources */ = {isa = PBXBuildFile; fileRef = D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */; };
 		58DF9F3315AB26C2003B4330 /* SPDateAdditions.m in Sources */ = {isa = PBXBuildFile; fileRef = 58DF9F3215AB26C2003B4330 /* SPDateAdditions.m */; };
 		58DF9F7315AB8509003B4330 /* SPSplitView.m in Sources */ = {isa = PBXBuildFile; fileRef = 58DF9F7215AB8509003B4330 /* SPSplitView.m */; };
 		58E205FC1234FE4F00A97059 /* KeyTemplate.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 58E205FB1234FE4F00A97059 /* KeyTemplate.pdf */; };
@@ -340,6 +344,7 @@
 		6F0EA8ED272F33B700514FF1 /* SPBundleManagerAdditions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F0EA8EC272F33B700514FF1 /* SPBundleManagerAdditions.swift */; };
 		6F0EA9242734ABE200514FF1 /* SABundleRunner.m in Sources */ = {isa = PBXBuildFile; fileRef = 6F0EA9232734ABE200514FF1 /* SABundleRunner.m */; };
 		73F70A961E4E547500636550 /* SPJSONFormatter.m in Sources */ = {isa = PBXBuildFile; fileRef = 73F70A951E4E547500636550 /* SPJSONFormatter.m */; };
+		76E0EC4FDFA34DFF833CDA02 /* SPPostgresStreamingResult.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B12EDC06BE00FE08B1 /* SPPostgresStreamingResult.m */; };
 		8831EFA8224011B700D10172 /* button_addTemplate.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 8831EFA5224011B700D10172 /* button_addTemplate.pdf */; };
 		8831EFAA2240128700D10172 /* button_removeTemplate.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 8831EFA92240128600D10172 /* button_removeTemplate.pdf */; };
 		8831EFAC2240131500D10172 /* button_editTemplate.pdf in Resources */ = {isa = PBXBuildFile; fileRef = 8831EFAB2240131400D10172 /* button_editTemplate.pdf */; };
@@ -363,6 +368,8 @@
 		8AEAC27B5C5B866575ECDB62 /* TableSortHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AEACD304316A0931DF8ED26 /* TableSortHelper.swift */; };
 		8AEACED018AABDD8CBB42877 /* TableSortHelperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AEACADD4B36D9819ADC93DD /* TableSortHelperTests.swift */; };
 		8D15AC340486D014006FF6A4 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1058C7A7FEA54F5311CA2CBB /* Cocoa.framework */; };
+		912BC33FF52B41DF9010CB79 /* SPPostgresConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B42EDC06BF00FE08B1 /* SPPostgresConnection.m */; };
+		927694781913475F82120AA0 /* SPPostgresFastStreamingResult.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B52EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m */; };
 		963DA1C72CACC71000B5A544 /* QuickLookUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 963DA1C22CACC6F000B5A544 /* QuickLookUI.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		963DA1C82CACC71B00B5A544 /* QuickLookUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 963DA1C22CACC6F000B5A544 /* QuickLookUI.framework */; settings = {ATTRIBUTES = (Weak, ); }; };
 		964908C8249A77D00052FC4A /* ssh_config in Resources */ = {isa = PBXBuildFile; fileRef = 964908C4249A77CF0052FC4A /* ssh_config */; };
@@ -387,15 +394,12 @@
 		A2A868B92EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B32EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m */; };
 		A2A868BA2EDC06BF00FE08B1 /* SPPostgresConnection.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B42EDC06BF00FE08B1 /* SPPostgresConnection.m */; };
 		A2A868BB2EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B52EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m */; };
-		912BC33FF52B41DF9010CB79 /* SPPostgresConnection.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B42EDC06BF00FE08B1 /* SPPostgresConnection.m */; };
-		22055987A61747DEB21212F9 /* SPPostgresResult.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B02EDC06BE00FE08B1 /* SPPostgresResult.m */; };
-		76E0EC4FDFA34DFF833CDA02 /* SPPostgresStreamingResult.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B12EDC06BE00FE08B1 /* SPPostgresStreamingResult.m */; };
-		BCE02095EC9A4721BA451E3A /* SPPostgresGeometryData.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B22EDC06BF00FE08B1 /* SPPostgresGeometryData.m */; };
-		1BF817975D8D40D5891DFD88 /* SPPostgresStreamingResultStore.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B32EDC06BF00FE08B1 /* SPPostgresStreamingResultStore.m */; };
-		927694781913475F82120AA0 /* SPPostgresFastStreamingResult.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = A2A868B52EDC06BF00FE08B1 /* SPPostgresFastStreamingResult.m */; };
-		CE1234560000000000000001 /* SPDebugLogger.m in Sources (Tests) */ = {isa = PBXBuildFile; fileRef = D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */; };
 		A2E041332EDC084C000BD615 /* AppCenterCrashes in Frameworks */ = {isa = PBXBuildFile; productRef = 515D303E25BD7DE60021CF1E /* AppCenterCrashes */; };
 		A2E041342EDC084C000BD615 /* AppCenterAnalytics in Frameworks */ = {isa = PBXBuildFile; productRef = 515D304025BD7DE60021CF1E /* AppCenterAnalytics */; };
+		A5A345F94B12EBF912FF71D4 /* SPDatabaseDocument+ViewControl.m in Sources */ = {isa = PBXBuildFile; fileRef = 8AFB4ABAE417C961903CA685 /* SPDatabaseDocument+ViewControl.m */; };
+		A6B1D3524D17F9FA4599AEE4 /* SPDatabaseDocument+TableControl.m in Sources */ = {isa = PBXBuildFile; fileRef = DB8384FFEBB3882F0EC1473E /* SPDatabaseDocument+TableControl.m */; };
+		A8A6B9FA0F8A9FF926F22CE8 /* SPDatabaseDocument+Print.m in Sources */ = {isa = PBXBuildFile; fileRef = D2C70473117B9931ED228068 /* SPDatabaseDocument+Print.m */; };
+		AD1299055E82EDE1CFD83393 /* SPDatabaseDocument+PGDelegate.m in Sources */ = {isa = PBXBuildFile; fileRef = 98DA5D3CD7675056DBC1C09A /* SPDatabaseDocument+PGDelegate.m */; };
 		B51D6B9E114C310C0074704E /* toolbar-switch-to-table-triggers.png in Resources */ = {isa = PBXBuildFile; fileRef = B51D6B9D114C310C0074704E /* toolbar-switch-to-table-triggers.png */; };
 		B52460D70F8EF92300171639 /* SPArrayAdditions.m in Sources */ = {isa = PBXBuildFile; fileRef = B52460D40F8EF92300171639 /* SPArrayAdditions.m */; };
 		B52460D80F8EF92300171639 /* SPTextViewAdditions.m in Sources */ = {isa = PBXBuildFile; fileRef = B52460D60F8EF92300171639 /* SPTextViewAdditions.m */; };
@@ -438,6 +442,7 @@
 		BCA6271C1031B9D40047E5D5 /* SPTooltip.m in Sources */ = {isa = PBXBuildFile; fileRef = BCA6271B1031B9D40047E5D5 /* SPTooltip.m */; };
 		BCD0AD490FBBFC340066EA5C /* SPSQLTokenizer.l in Sources */ = {isa = PBXBuildFile; fileRef = BCD0AD480FBBFC340066EA5C /* SPSQLTokenizer.l */; };
 		BCE0025D11173D2A009DA533 /* SPFieldMapperController.m in Sources */ = {isa = PBXBuildFile; fileRef = BCE0025C11173D2A009DA533 /* SPFieldMapperController.m */; };
+		BCE02095EC9A4721BA451E3A /* SPPostgresGeometryData.m in Sources */ = {isa = PBXBuildFile; fileRef = A2A868B22EDC06BF00FE08B1 /* SPPostgresGeometryData.m */; };
 		C9AD7C781676138000234EEE /* database-small@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = C9AD7C771676138000234EEE /* database-small@2x.png */; };
 		C9AD7C7B1676158C00234EEE /* toolbar-switch-to-sql.png in Resources */ = {isa = PBXBuildFile; fileRef = C9AD7C791676158C00234EEE /* toolbar-switch-to-sql.png */; };
 		C9AD7C7C1676158C00234EEE /* toolbar-switch-to-sql@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = C9AD7C7A1676158C00234EEE /* toolbar-switch-to-sql@2x.png */; };
@@ -449,7 +454,10 @@
 		C9F92710162D38D70051CB2E /* toolbar-switch-to-table-info@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = C9F9270F162D38D70051CB2E /* toolbar-switch-to-table-info@2x.png */; };
 		C9F92712162D39E60051CB2E /* toolbar-switch-to-browse.png in Resources */ = {isa = PBXBuildFile; fileRef = C9F92711162D39E60051CB2E /* toolbar-switch-to-browse.png */; };
 		C9F92714162D39FE0051CB2E /* toolbar-switch-to-browse@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = C9F92713162D39FE0051CB2E /* toolbar-switch-to-browse@2x.png */; };
+		CE1234560000000000000001 /* SPDebugLogger.m in Sources */ = {isa = PBXBuildFile; fileRef = D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */; };
 		D35577F52728C6CF002B3989 /* SPWindowTabAccessory.swift in Sources */ = {isa = PBXBuildFile; fileRef = D35577F42728C6CF002B3989 /* SPWindowTabAccessory.swift */; };
+		D3BGL0GG103E15B50001A2B3 /* SPDebugLogger.m in Sources */ = {isa = PBXBuildFile; fileRef = D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */; };
+		F6A2B308C6C37CE0B529243E /* SPDatabaseDocument+Toolbar.m in Sources */ = {isa = PBXBuildFile; fileRef = 8AD98E4F4574C4E6D51B278C /* SPDatabaseDocument+Toolbar.m */; };
 		FD0E72EA2C38DEA1007EF348 /* SATableHeaderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0E72E92C38DC0E007EF348 /* SATableHeaderView.swift */; };
 		FD0E72EC2C391F44007EF348 /* SQLiteDisplayFormatManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0E72EB2C391F44007EF348 /* SQLiteDisplayFormatManager.swift */; };
 		FD18C8992C3C9B2F002A5D57 /* SAUuidFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD18C8982C3C9B2F002A5D57 /* SAUuidFormatter.swift */; };
@@ -808,6 +816,7 @@
 		29FA88221114619E00D1AF3D /* SPTableTriggers.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPTableTriggers.m; sourceTree = "<group>"; };
 		2A37F4C4FDCFA73011CA2CEA /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
 		2A37F4C5FDCFA73011CA2CEA /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = /System/Library/Frameworks/Foundation.framework; sourceTree = "<absolute>"; };
+		2CF0BEEFF8DE2368B6FA7F15 /* SPDatabaseDocument+Menu.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+Menu.m"; sourceTree = "<group>"; };
 		380F4ED90FC0B50500B0BFD7 /* Unit Tests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "Unit Tests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		380F4EF40FC0B68F00B0BFD7 /* SPStringAdditionsTests.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPStringAdditionsTests.m; sourceTree = "<group>"; };
 		384582C30FB95FF800DDACB6 /* func-small.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "func-small.png"; sourceTree = "<group>"; };
@@ -1016,8 +1025,6 @@
 		58D2E22D101222870063EF1D /* link-arrow.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "link-arrow.png"; sourceTree = "<group>"; };
 		58DA8861103E15B5000B98DF /* SPLogger.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPLogger.h; sourceTree = "<group>"; };
 		58DA8862103E15B5000B98DF /* SPLogger.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPLogger.m; sourceTree = "<group>"; };
-		D3BGL0GG103E15B50001A2B5 /* SPDebugLogger.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPDebugLogger.h; sourceTree = "<group>"; };
-		D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPDebugLogger.m; sourceTree = "<group>"; };
 		58DF9F3115AB26C2003B4330 /* SPDateAdditions.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPDateAdditions.h; sourceTree = "<group>"; };
 		58DF9F3215AB26C2003B4330 /* SPDateAdditions.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPDateAdditions.m; sourceTree = "<group>"; };
 		58DF9F7115AB8509003B4330 /* SPSplitView.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPSplitView.h; sourceTree = "<group>"; };
@@ -1029,6 +1036,7 @@
 		58FEF16C0F23D66600518E8E /* SPSQLParser.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPSQLParser.m; sourceTree = "<group>"; };
 		58FEF57C0F3B4E9700518E8E /* SPTableData.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPTableData.h; sourceTree = "<group>"; };
 		58FEF57D0F3B4E9700518E8E /* SPTableData.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPTableData.m; sourceTree = "<group>"; };
+		6266E564DDC090F43B7F92E5 /* SPDatabaseDocument+Scripting.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+Scripting.m"; sourceTree = "<group>"; };
 		65F52CC724AE21D600FED3CB /* SPFilePreferencePane.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPFilePreferencePane.m; sourceTree = "<group>"; };
 		65F52CCC24AE21F200FED3CB /* SPFilePreferencePane.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = SPFilePreferencePane.h; sourceTree = "<group>"; };
 		6F0EA8EC272F33B700514FF1 /* SPBundleManagerAdditions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SPBundleManagerAdditions.swift; sourceTree = "<group>"; };
@@ -1056,8 +1064,10 @@
 		8831EFC6224016E000D10172 /* button_edit_modeTemplate.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; path = button_edit_modeTemplate.pdf; sourceTree = "<group>"; };
 		8831EFCB2240175300D10172 /* button_actionTemplate.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; path = button_actionTemplate.pdf; sourceTree = "<group>"; };
 		8831EFCC2240175300D10172 /* button_paginationTemplate.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; path = button_paginationTemplate.pdf; sourceTree = "<group>"; };
+		8AD98E4F4574C4E6D51B278C /* SPDatabaseDocument+Toolbar.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+Toolbar.m"; sourceTree = "<group>"; };
 		8AEACADD4B36D9819ADC93DD /* TableSortHelperTests.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TableSortHelperTests.swift; sourceTree = "<group>"; };
 		8AEACD304316A0931DF8ED26 /* TableSortHelper.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = TableSortHelper.swift; sourceTree = "<group>"; };
+		8AFB4ABAE417C961903CA685 /* SPDatabaseDocument+ViewControl.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+ViewControl.m"; sourceTree = "<group>"; };
 		8D15AC370486D014006FF6A4 /* Sequel PAce.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Sequel PAce.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		963DA1C22CACC6F000B5A544 /* QuickLookUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuickLookUI.framework; path = System/Library/Frameworks/QuickLookUI.framework; sourceTree = SDKROOT; };
 		964908C4249A77CF0052FC4A /* ssh_config */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = ssh_config; sourceTree = "<group>"; };
@@ -1072,6 +1082,7 @@
 		96B0A1502493DF16007BB270 /* ShortcutRecorder.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ShortcutRecorder.framework; path = Frameworks/ShortcutRecorder.framework; sourceTree = "<group>"; };
 		96B0A1532493F43B007BB270 /* TunnelAssistant-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = "TunnelAssistant-Info.plist"; path = "Plists/TunnelAssistant-Info.plist"; sourceTree = "<group>"; };
 		96CA8F9B2783A8FE0061C2D1 /* Menlo.ttc */ = {isa = PBXFileReference; lastKnownFileType = file; name = Menlo.ttc; path = Fonts/Menlo.ttc; sourceTree = "<group>"; };
+		98DA5D3CD7675056DBC1C09A /* SPDatabaseDocument+PGDelegate.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+PGDelegate.m"; sourceTree = "<group>"; };
 		9BE760B3C4586EA3B1A48600 /* SPHelpViewerController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPHelpViewerController.m; sourceTree = "<group>"; };
 		9BE761AE45D4F6B9B90E67DE /* SPHelpViewerClient.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPHelpViewerClient.h; sourceTree = "<group>"; };
 		9BE764320CE8E86E8F63647B /* SPHelpViewerClient.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPHelpViewerClient.m; sourceTree = "<group>"; };
@@ -1190,7 +1201,12 @@
 		C9F9270F162D38D70051CB2E /* toolbar-switch-to-table-info@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "toolbar-switch-to-table-info@2x.png"; sourceTree = "<group>"; };
 		C9F92711162D39E60051CB2E /* toolbar-switch-to-browse.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "toolbar-switch-to-browse.png"; sourceTree = "<group>"; };
 		C9F92713162D39FE0051CB2E /* toolbar-switch-to-browse@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "toolbar-switch-to-browse@2x.png"; sourceTree = "<group>"; };
+		D2988D3D1ECFD02415480941 /* SPDatabaseDocument+State.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+State.m"; sourceTree = "<group>"; };
+		D2C70473117B9931ED228068 /* SPDatabaseDocument+Print.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+Print.m"; sourceTree = "<group>"; };
 		D35577F42728C6CF002B3989 /* SPWindowTabAccessory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SPWindowTabAccessory.swift; sourceTree = "<group>"; };
+		D3BGL0GG103E15B50001A2B4 /* SPDebugLogger.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = SPDebugLogger.m; sourceTree = "<group>"; };
+		D3BGL0GG103E15B50001A2B5 /* SPDebugLogger.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = SPDebugLogger.h; sourceTree = "<group>"; };
+		DB8384FFEBB3882F0EC1473E /* SPDatabaseDocument+TableControl.m */ = {isa = PBXFileReference; explicitFileType = sourcecode.c.objc; includeInIndex = 1; path = "SPDatabaseDocument+TableControl.m"; sourceTree = "<group>"; };
 		FD0E72E92C38DC0E007EF348 /* SATableHeaderView.swift */ = {isa = PBXFileReference; indentWidth = 4; lastKnownFileType = sourcecode.swift; path = SATableHeaderView.swift; sourceTree = "<group>"; };
 		FD0E72EB2C391F44007EF348 /* SQLiteDisplayFormatManager.swift */ = {isa = PBXFileReference; indentWidth = 4; lastKnownFileType = sourcecode.swift; path = SQLiteDisplayFormatManager.swift; sourceTree = "<group>"; };
 		FD18C8982C3C9B2F002A5D57 /* SAUuidFormatter.swift */ = {isa = PBXFileReference; indentWidth = 4; lastKnownFileType = sourcecode.swift; path = SAUuidFormatter.swift; sourceTree = "<group>"; };
@@ -1453,6 +1469,14 @@
 				171156501E8B0F40002E6363 /* Table Relations */,
 				17D38F691279E17D00672B13 /* Table Structure */,
 				17005CB016D6CEA400AF81F4 /* Table Triggers */,
+				D2C70473117B9931ED228068 /* SPDatabaseDocument+Print.m */,
+				2CF0BEEFF8DE2368B6FA7F15 /* SPDatabaseDocument+Menu.m */,
+				8AD98E4F4574C4E6D51B278C /* SPDatabaseDocument+Toolbar.m */,
+				D2988D3D1ECFD02415480941 /* SPDatabaseDocument+State.m */,
+				6266E564DDC090F43B7F92E5 /* SPDatabaseDocument+Scripting.m */,
+				8AFB4ABAE417C961903CA685 /* SPDatabaseDocument+ViewControl.m */,
+				DB8384FFEBB3882F0EC1473E /* SPDatabaseDocument+TableControl.m */,
+				98DA5D3CD7675056DBC1C09A /* SPDatabaseDocument+PGDelegate.m */,
 			);
 			name = "Main View Controllers";
 			path = MainViewControllers;
@@ -2208,7 +2232,7 @@
 			path = MGTemplateEngine;
 			sourceTree = "<group>";
 		};
-		2A37F4AAFDCFA73011CA2CEA /* sequel-pro */ = {
+		2A37F4AAFDCFA73011CA2CEA = {
 			isa = PBXGroup;
 			children = (
 				A2A868B42EDC06BF00FE08B1 /* SPPostgresConnection.m */,
@@ -2640,7 +2664,7 @@
 				cs,
 				eo,
 			);
-			mainGroup = 2A37F4AAFDCFA73011CA2CEA /* sequel-pro */;
+			mainGroup = 2A37F4AAFDCFA73011CA2CEA;
 			packageReferences = (
 				51D9527425AE2B5300574BEB /* XCRemoteSwiftPackageReference "fmdb" */,
 				515D303D25BD7DE60021CF1E /* XCRemoteSwiftPackageReference "appcenter-sdk-apple" */,
@@ -2950,13 +2974,13 @@
 				1AE6C1CD25B07E9500880D73 /* SPFunctionsTests.m in Sources */,
 				1A9A40D525875EC9009F0E71 /* NSMutableArray-MultipleSort.m in Sources */,
 				8AEACED018AABDD8CBB42877 /* TableSortHelperTests.swift in Sources */,
-				912BC33FF52B41DF9010CB79 /* SPPostgresConnection.m in Sources (Tests) */,
-				22055987A61747DEB21212F9 /* SPPostgresResult.m in Sources (Tests) */,
-				76E0EC4FDFA34DFF833CDA02 /* SPPostgresStreamingResult.m in Sources (Tests) */,
-				BCE02095EC9A4721BA451E3A /* SPPostgresGeometryData.m in Sources (Tests) */,
-				1BF817975D8D40D5891DFD88 /* SPPostgresStreamingResultStore.m in Sources (Tests) */,
-				927694781913475F82120AA0 /* SPPostgresFastStreamingResult.m in Sources (Tests) */,
-				CE1234560000000000000001 /* SPDebugLogger.m in Sources (Tests) */,
+				912BC33FF52B41DF9010CB79 /* SPPostgresConnection.m in Sources */,
+				22055987A61747DEB21212F9 /* SPPostgresResult.m in Sources */,
+				76E0EC4FDFA34DFF833CDA02 /* SPPostgresStreamingResult.m in Sources */,
+				BCE02095EC9A4721BA451E3A /* SPPostgresGeometryData.m in Sources */,
+				1BF817975D8D40D5891DFD88 /* SPPostgresStreamingResultStore.m in Sources */,
+				927694781913475F82120AA0 /* SPPostgresFastStreamingResult.m in Sources */,
+				CE1234560000000000000001 /* SPDebugLogger.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -3196,6 +3220,14 @@
 				9BE765682376A00C82FB93AA /* SPHelpViewerClient.m in Sources */,
 				8AEAC27B5C5B866575ECDB62 /* TableSortHelper.swift in Sources */,
 				44011FFBC7DF57126761313F /* SQLitePinnedTableManager.swift in Sources */,
+				A8A6B9FA0F8A9FF926F22CE8 /* SPDatabaseDocument+Print.m in Sources */,
+				4998160F5B96F66ED6C5C0BC /* SPDatabaseDocument+Menu.m in Sources */,
+				F6A2B308C6C37CE0B529243E /* SPDatabaseDocument+Toolbar.m in Sources */,
+				36FCEE4EA8738B71DAC3AFF3 /* SPDatabaseDocument+State.m in Sources */,
+				209420D48F1D0AC1905432B3 /* SPDatabaseDocument+Scripting.m in Sources */,
+				A5A345F94B12EBF912FF71D4 /* SPDatabaseDocument+ViewControl.m in Sources */,
+				A6B1D3524D17F9FA4599AEE4 /* SPDatabaseDocument+TableControl.m in Sources */,
+				AD1299055E82EDE1CFD83393 /* SPDatabaseDocument+PGDelegate.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
