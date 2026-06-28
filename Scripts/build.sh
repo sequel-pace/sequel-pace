@@ -341,12 +341,24 @@ do_package() {
         echo -e "${GREEN}✓ Ad-hoc signature applied${NC}"
     fi
 
-    # Build DMG with drag-to-Applications layout + install helper
+    # Build DMG with custom background, icon layout, and install helper
     echo -e "${BLUE}Creating DMG...${NC}"
-    rm -rf "${DMG_STAGING}" "${DMG_PATH}"
-    mkdir -p "${DMG_STAGING}"
+
+    local DMG_TMP="${BUILD_DIR}/sequel-pace-tmp.dmg"
+    local DMG_VOLUME="Sequel PAce"
+    local BACKGROUND_SRC="${SCRIPT_DIR}/../Resources/DMG/background.png"
+
+    rm -rf "${DMG_STAGING}" "${DMG_PATH}" "${DMG_TMP}"
+    mkdir -p "${DMG_STAGING}/.background"
+
+    # Copy app and create symlinks
     cp -R "${APP_PATH}" "${DMG_STAGING}/"
     ln -s /Applications "${DMG_STAGING}/Applications"
+
+    # Copy background image (hidden folder, referenced by AppleScript)
+    if [ -f "${BACKGROUND_SRC}" ]; then
+        cp "${BACKGROUND_SRC}" "${DMG_STAGING}/.background/background.png"
+    fi
 
     # Install helper script — removes Gatekeeper quarantine automatically
     cat > "${DMG_STAGING}/Install Sequel PAce.command" <<'INSTALL_EOF'
@@ -359,11 +371,57 @@ echo "Done. Launch Sequel PAce from your Applications folder."
 INSTALL_EOF
     chmod +x "${DMG_STAGING}/Install Sequel PAce.command"
 
-    hdiutil create \
-        -volname "Sequel PAce" \
+    # Create a read-write DMG large enough to hold contents + layout metadata
+    local STAGING_SIZE
+    STAGING_SIZE=$(du -sm "${DMG_STAGING}" | awk '{print $1 + 20}')
+    hdiutil create -size "${STAGING_SIZE}m" -fs HFS+ \
+        -volname "${DMG_VOLUME}" \
         -srcfolder "${DMG_STAGING}" \
-        -ov -format UDZO \
-        "${DMG_PATH}"
+        -ov -format UDRW "${DMG_TMP}" >/dev/null
+
+    # Detach any previous mount with the same volume name to avoid "Sequel PAce 1"
+    hdiutil detach "/Volumes/${DMG_VOLUME}" 2>/dev/null || true
+    sleep 1
+
+    # Mount the RW DMG
+    local MOUNT_DIR
+    MOUNT_DIR=$(hdiutil attach -readwrite -noverify -noautoopen "${DMG_TMP}" \
+        | grep "/Volumes/" | awk '{print $NF}')
+
+    # Apply icon layout and background via AppleScript
+    osascript <<APPLESCRIPT
+tell application "Finder"
+    tell disk "${DMG_VOLUME}"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 100, 1000, 600}
+        set viewOptions to the icon view options of container window
+        set arrangement of viewOptions to not arranged
+        set icon size of viewOptions to 100
+        set text size of viewOptions to 12
+        set background picture of viewOptions to file ".background:background.png"
+        -- App icon: left side
+        set position of item "Sequel PAce.app" of container window to {200, 290}
+        -- Applications alias: right of arrow
+        set position of item "Applications" of container window to {560, 290}
+        -- Install script: bottom right
+        set position of item "Install Sequel PAce.command" of container window to {560, 420}
+        close
+        open
+        update without registering applications
+        delay 2
+        close
+    end tell
+end tell
+APPLESCRIPT
+
+    # Unmount, convert to read-only compressed DMG
+    hdiutil detach "/Volumes/${DMG_VOLUME}" >/dev/null 2>&1 || hdiutil detach "${MOUNT_DIR}" >/dev/null 2>&1 || true
+    hdiutil convert "${DMG_TMP}" -format UDZO -imagekey zlib-level=9 \
+        -o "${DMG_PATH}" >/dev/null
+    rm -f "${DMG_TMP}"
     rm -rf "${DMG_STAGING}"
 
     echo -e "${GREEN}✓ Package complete${NC}"
