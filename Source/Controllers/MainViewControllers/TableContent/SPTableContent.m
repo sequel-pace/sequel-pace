@@ -3001,10 +3001,13 @@ static id configureDataCell(SPTableContent *tc, NSDictionary *colDefs, NSString 
 			@"  JOIN information_schema.key_column_usage kcu "
 			@"    ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema "
 			@"  WHERE tc.constraint_type = 'PRIMARY KEY' "
-			@"    AND tc.table_schema = 'public' AND tc.table_name = %@"
+			@"    AND tc.table_schema = %@ AND tc.table_name = %@"
 			@") pk ON c.column_name = pk.column_name "
-			@"WHERE c.table_schema = 'public' AND c.table_name = %@",
-			[selectedTable tickQuotedString], [selectedTable tickQuotedString]]];
+			@"WHERE c.table_schema = %@ AND c.table_name = %@",
+			[[tablesListInstance selectedSchema] ?: @"public" tickQuotedString],
+			[selectedTable tickQuotedString],
+			[[tablesListInstance selectedSchema] ?: @"public" tickQuotedString],
+			[selectedTable tickQuotedString]]];
 
 		if(!theResult) {
 			SPLog(@"no result from column info query! Abort.");

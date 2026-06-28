@@ -1548,6 +1548,7 @@ set_input:
 		[sqlExporter setSqlInsertDivider:[exportSQLInsertDividerPopUpButton indexOfSelectedItem]];
 
 		[sqlExporter setSqlExportTables:exportTables];
+		[sqlExporter setExportSchema:[tablesListInstance selectedSchema] ?: @"public"];
 
 		// Create custom filename if required
 		NSString *selectedTableName = (exportSource == SPTableExport && [exportTables count] == 1)? [[exportTables firstObject] firstObject] : nil;
@@ -1732,6 +1733,7 @@ set_input:
 		[csvExporter setCsvDataArray:dataArray];
 	}
 
+	[csvExporter setExportSchema:[tablesListInstance selectedSchema] ?: @"public"];
 	[csvExporter setCsvTableData:tableDataInstance];
 	[csvExporter setCsvOutputFieldNames:[exportCSVIncludeFieldNamesCheck state]];
 	[csvExporter setCsvFieldSeparatorString:[exportCSVFieldsTerminatedField stringValue]];
@@ -1797,6 +1799,7 @@ set_input:
 	// of table and table content exports.
 	[xmlExporter setXmlTableName:table];
 
+	[xmlExporter setExportSchema:[tablesListInstance selectedSchema] ?: @"public"];
 	[xmlExporter setXmlFormat:[exportXMLFormatPopUpButton indexOfSelectedItem]];
 	[xmlExporter setXmlOutputIncludeStructure:[exportXMLIncludeStructure state]];
 	[xmlExporter setXmlOutputIncludeContent:[exportXMLIncludeContent state]];

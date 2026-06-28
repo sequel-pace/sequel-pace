@@ -587,7 +587,8 @@ static NSString *SPRelationOnDeleteKey   = @"on_delete";
     // Get all tables in the current database
     [refTablePopUpButton removeAllItems];
     if (database != nil && database.length != 0) {
-        SPPostgresResult *result = [connection queryString:[NSString stringWithFormat:@"SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = 'public' ORDER BY table_name ASC"]]; // Assuming public schema for now
+        NSString *currentSchema = [tablesListInstance selectedSchema] ?: @"public";
+        SPPostgresResult *result = [connection queryString:[NSString stringWithFormat:@"SELECT table_name FROM information_schema.tables WHERE table_type = 'BASE TABLE' AND table_schema = %@ ORDER BY table_name ASC", [currentSchema tickQuotedString]]];
         [result setDefaultRowReturnType:SPPostgresResultRowAsArray];
         [result setReturnDataAsStrings:YES]; // TODO: Workaround for #2699/#2700
         for (NSArray *eachRow in result) {

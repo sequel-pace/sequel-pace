@@ -123,9 +123,10 @@
                 @"JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name "
                 @"WHERE tc.table_name = %@ AND tc.constraint_type = 'PRIMARY KEY') pk "
                 @"ON c.column_name = pk.column_name "
-                @"WHERE c.table_name = %@ AND c.table_schema = 'public' "
+                @"WHERE c.table_name = %@ AND c.table_schema = %@ "
                 @"ORDER BY c.ordinal_position",
-                [[self xmlTableName] tickQuotedString], [[self xmlTableName] tickQuotedString]]];
+                [[self xmlTableName] tickQuotedString], [[self xmlTableName] tickQuotedString],
+                [self.exportSchema ?: @"public" tickQuotedString]]];
 
             // PostgreSQL: Get table statistics from pg_stat_user_tables and pg_class
             statusResult = [connection queryString:[NSString stringWithFormat:
@@ -145,8 +146,8 @@
                 @"obj_description(c.oid) AS \"Comment\" "
                 @"FROM pg_class c "
                 @"LEFT JOIN pg_stat_user_tables s ON c.relname = s.relname "
-                @"WHERE c.relname = %@ AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 'public')",
-                [[self xmlTableName] tickQuotedString]]];
+                @"WHERE c.relname = %@ AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %@)",
+                [[self xmlTableName] tickQuotedString], [self.exportSchema ?: @"public" tickQuotedString]]];
 
             if ([structureResult numberOfRows]) {
 

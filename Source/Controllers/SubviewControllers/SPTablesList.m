@@ -167,6 +167,22 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	for (NSTableColumn *column in [tablesListView tableColumns]) {
 		[[column dataCell] setFont:tableFont];
 	}
+
+	// If schemaPopUpButton is not wired in XIB, create it programmatically in the toolbar area
+	if (!schemaPopUpButton) {
+		NSView *toolbarBar = [tableListSplitView superview];
+		if (toolbarBar) {
+			NSPopUpButton *popup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(130, 0, 59, 25) pullsDown:NO];
+			[popup setBezelStyle:NSBezelStyleSmallSquare];
+			[popup setControlSize:NSControlSizeSmall];
+			[popup setFont:[NSFont systemFontOfSize:[NSFont smallSystemFontSize]]];
+			[popup setAutoresizingMask:NSViewMaxXMargin | NSViewNotSizable];
+			[popup setTarget:self];
+			[popup setAction:@selector(schemaChanged:)];
+			[toolbarBar addSubview:popup];
+			schemaPopUpButton = popup;
+		}
+	}
 }
 
 #pragma mark -
@@ -2776,6 +2792,7 @@ static NSString *SPNewTableCollation    = @"SPNewTableCollation";
 	NSString *newSchema = [[schemaPopUpButton selectedItem] title];
 	if (newSchema && ![newSchema isEqualToString:selectedSchema]) {
 		[self setSelectedSchema:newSchema];
+		[[tableDocumentInstance getConnection] setSearchPathToSchema:newSchema];
 		[self refreshObjectsForSchema:newSchema];
 		[self updateTables:self];
 	}

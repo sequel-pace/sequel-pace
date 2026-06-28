@@ -35,6 +35,7 @@
 @implementation SPExporter
 
 @synthesize connection;
+@synthesize exportSchema;
 @synthesize serverSupport = serverSupport;
 @synthesize exportProgressValue;
 @synthesize exportProcessIsRunning;

@@ -133,8 +133,8 @@
         SPPostgresResult *queryResult = [connection queryString:[NSString stringWithFormat:
             @"SELECT relkind FROM pg_class c "
             @"JOIN pg_namespace n ON c.relnamespace = n.oid "
-            @"WHERE n.nspname = 'public' AND c.relname = %@",
-            [[self csvTableName] tickQuotedString]]];
+            @"WHERE n.nspname = %@ AND c.relname = %@",
+            [self.exportSchema ?: @"public" tickQuotedString], [[self csvTableName] tickQuotedString]]];
         [queryResult setReturnDataAsStrings:YES];
 
         if ([queryResult numberOfRows]) {

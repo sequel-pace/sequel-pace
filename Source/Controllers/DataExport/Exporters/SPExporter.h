@@ -82,6 +82,11 @@
 @property(readwrite, strong) SPPostgresConnection *connection;
 
 /**
+ * @property exportSchema The PostgreSQL schema to export from (defaults to "public")
+ */
+@property(readwrite, copy) NSString *exportSchema;
+
+/**
  * @property serverSupport Information about the features supported by this PostgreSQL version
  */
 @property(readwrite, strong) SPServerSupport *serverSupport;

@@ -260,8 +260,8 @@
                         @"SELECT column_name, data_type, character_maximum_length, numeric_precision, numeric_scale, "
                         @"is_nullable, column_default "
                         @"FROM information_schema.columns "
-                        @"WHERE table_schema = 'public' AND table_name = %@ "
-                        @"ORDER BY ordinal_position", [tableName tickQuotedString]];
+                        @"WHERE table_schema = %@ AND table_name = %@ "
+                        @"ORDER BY ordinal_position", [self.exportSchema ?: @"public" tickQuotedString], [tableName tickQuotedString]];
 
                     SPPostgresResult *columnsResult = [connection queryString:columnsQuery];
                     [columnsResult setReturnDataAsStrings:YES];
@@ -637,8 +637,8 @@
                 SPPostgresResult *queryResult = [connection queryString:[NSString stringWithFormat:
                     @"SELECT trigger_name, event_manipulation, action_timing, action_statement "
                     @"FROM information_schema.triggers "
-                    @"WHERE event_object_table = %@ AND trigger_schema = 'public'",
-                    [tableName tickQuotedString]]];
+                    @"WHERE event_object_table = %@ AND trigger_schema = %@",
+                    [tableName tickQuotedString], [self.exportSchema ?: @"public" tickQuotedString]]];
 
                 [queryResult setReturnDataAsStrings:YES];
 
@@ -752,7 +752,7 @@
             @"SELECT p.proname AS \"Name\", pg_get_functiondef(p.oid) AS definition "
             @"FROM pg_proc p "
             @"JOIN pg_namespace n ON p.pronamespace = n.oid "
-            @"WHERE n.nspname = 'public' AND p.prokind = '%@'", prokind]];
+            @"WHERE n.nspname = %@ AND p.prokind = '%@'", [self.exportSchema ?: @"public" tickQuotedString], prokind]];
 
         [queryResult setReturnDataAsStrings:YES];
 
@@ -959,7 +959,7 @@
                         [fieldString appendString:@" DEFAULT NULL"];
                     }
                 }
-                else if (([[column objectForKey:@"type"] isInArray:@[@"TIMESTAMP",@"DATETIME"]]) && [[column objectForKey:@"default"] isMatchedByRegex:SPCurrentTimestampPattern]) {
+                else if (([[column objectForKey:@"type"] isInArray:@[@"TIMESTAMP",@"DATETIME",@"timestamp",@"timestamptz",@"timestamp without time zone",@"timestamp with time zone"]]) && [[column objectForKey:@"default"] isMatchedByRegex:SPCurrentTimestampPattern]) {
                     [fieldString appendFormat:@" DEFAULT %@",[column objectForKey:@"default"]];
                 }
                 else {
@@ -973,8 +973,8 @@
         }
     }
 
-    // Append the remainder of the table string
-    [placeholderSyntax appendString:@") ENGINE=MyISAM"];
+    // Close the CREATE TABLE statement (PostgreSQL has no ENGINE clause)
+    [placeholderSyntax appendString:@")"];
 
     // Clean up and return
 

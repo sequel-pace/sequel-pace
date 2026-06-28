@@ -482,11 +482,12 @@
     SPPostgresResult *theResult;
     NSString *queryStr;
 
+    NSString *currentSchema = [tableListInstance selectedSchema] ?: @"public";
     if (database){
-        queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default, ordinal_position FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %@", [tableName tickQuotedString]];
+        queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default, ordinal_position FROM information_schema.columns WHERE table_schema = %@ AND table_name = %@", [currentSchema tickQuotedString], [tableName tickQuotedString]];
     }
     else{
-        queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default, ordinal_position FROM information_schema.columns WHERE table_schema = 'public' AND table_name = %@", [tableName tickQuotedString]];
+        queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, character_maximum_length, is_nullable, column_default, ordinal_position FROM information_schema.columns WHERE table_schema = %@ AND table_name = %@", [currentSchema tickQuotedString], [tableName tickQuotedString]];
     }
 
     theResult = [postgresConnection queryString:queryStr];
@@ -584,7 +585,7 @@
     [tableData setObject:@"utf8" forKey:@"encoding"]; // Default to utf8 for now
 
     // Fetch primary keys
-    NSString *pkQuery = [NSString stringWithFormat:@"SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_name = %@ AND tc.table_schema = 'public'", [tableName tickQuotedString]];
+    NSString *pkQuery = [NSString stringWithFormat:@"SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_name = %@ AND tc.table_schema = %@", [tableName tickQuotedString], [currentSchema tickQuotedString]];
     SPPostgresResult *pkResult = [postgresConnection queryString:pkQuery];
     NSMutableArray *pks = [NSMutableArray array];
     for (NSDictionary *row in pkResult) {
@@ -606,7 +607,8 @@
 
     SPLog(@"createTableSyntaxFromView");
 
-    NSString *queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = %@ AND table_schema = 'public'", [tableName tickQuotedString]];
+    NSString *currentSchema = [tableListInstance selectedSchema] ?: @"public";
+    NSString *queryStr = [NSString stringWithFormat:@"SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = %@ AND table_schema = %@", [tableName tickQuotedString], [currentSchema tickQuotedString]];
 
     SPLog(@"queryStr: %@", queryStr);
 
@@ -1038,10 +1040,11 @@
 
 	// Retrieve column information for the view using PostgreSQL's information_schema
 	// Note: PostgreSQL doesn't have an 'extra' column like MySQL, so we derive it from column_default
+	NSString *viewSchema = [tableListInstance selectedSchema] ?: @"public";
 	theResult = [postgresConnection queryString:[NSString stringWithFormat:
 		@"SELECT column_name AS \"Field\", data_type AS \"Type\", is_nullable AS \"Null\", column_default AS \"Default\", "
 		@"CASE WHEN column_default LIKE 'nextval%%' THEN 'auto_increment' ELSE '' END AS \"Extra\" "
-		@"FROM information_schema.columns WHERE table_name = %@ AND table_schema = 'public'", [viewName tickQuotedString]]];
+		@"FROM information_schema.columns WHERE table_name = %@ AND table_schema = %@", [viewName tickQuotedString], [viewSchema tickQuotedString]]];
 	[theResult setReturnDataAsStrings:YES];
 
 	// Check for any errors, but only display them if a connection still exists
