@@ -134,7 +134,8 @@ import OSLog
                 }
                 catch {
                     db.rollback()
-                    fatalError("Creating \(dbFileName) failed with error: \(error)")
+                    LOG.error("Creating \(dbFileName) failed with error: \(error)")
+                    return schemaVersion
                 }
 
                 newSchemaVersion = 1

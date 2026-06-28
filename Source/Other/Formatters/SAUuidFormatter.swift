@@ -147,8 +147,9 @@ import Foundation
         let range = NSRange(hex.startIndex..., in: hex)
 
         Self.REGEX_PAIRS.enumerateMatches(in: hex, range: range) { match, _, _ in
-            let pair = (hex as NSString).substring(with: match!.range)
-            let byte = UInt8(pair, radix: 16)!
+            guard let match = match else { return }
+            let pair = (hex as NSString).substring(with: match.range)
+            guard let byte = UInt8(pair, radix: 16) else { return }
             data.append(byte)
         }
 

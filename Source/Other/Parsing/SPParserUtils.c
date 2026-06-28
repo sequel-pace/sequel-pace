@@ -54,62 +54,24 @@ size_t utf8strlen(const char * _s)
 	
 	const char * s;
 	long count = 0;
-	size_t u = 0;
-	size_t u1 = 0;
 	unsigned char b;
 	
 	
-	/* Handle any initial misaligned bytes. */
-	for (s = _s; (uintptr_t)(s) & SIZET1; s++) {
+	/* Process all bytes. The original word-at-a-time block read caused an ASAN
+	   heap-buffer-overflow when the allocation ended at the null terminator and the
+	   aligned word read extended past it (GitHub issue #792). Replaced with a safe
+	   byte-by-byte loop that produces identical results. */
+	for (s = _s; ; s++) {
 		b = *s;
-		
+
 		/* Exit if we hit a zero byte. */
 		if (b == '\0')
 			goto done;
-		
+
 		/* Is this byte NOT the first byte of a character? */
 		count += (b >> 7) & ((~b) >> 6);
-		
-		/* CORRECT */
-		count -= (b & 0xf0) == 0xf0;
-	}
-	
-	/* Handle complete blocks. */
-	for (; ; s += SIZET) {
-		/* Prefetch 256 bytes ahead. */
-		__builtin_prefetch(&s[256], 0, 0);
 
-		/* Grab 4 or 8 bytes of UTF-8 data. */
-		u = *(size_t *)(s); // FIXME: AddressSanitizer: heap-buffer-overflow - GitHub issue: #792
-		
-		/* Exit the loop if there are any zero bytes. */
-		if ((u - ONEMASK) & (~u) & ONEMASK8)
-			break;
-		
-		/* CORRECT */
-		u1 = u & FMASK;
-		u1 = (u1 >> 7) & (u1 >> 6) & (u1 >> 5) & (u1 >> 4);
-		if (u1) count -= (u1 * ONEMASK) >> SBYTE;
-		
-		/* Count bytes which are NOT the first byte of a character. */
-		u = ((u & ONEMASK8) >> 7) & ((~u) >> 6);
-		
-		count += (u * ONEMASK) >> SBYTE;
-
-	}
-	
-	/* Take care of any left-over bytes. */
-	for (; ; s++) {
-		b = *s;
-		
-		/* Exit if we hit a zero byte. */
-		if (b == '\0')
-			break;
-		
-		/* Is this byte NOT the first byte of a character? */
-		count += (b >> 7) & ((~b) >> 6);
-		
-		/* CORRECT */
+		/* CORRECT: adjust for 4-byte UTF-8 sequences which NSString counts as length 2 */
 		count -= (b & 0xf0) == 0xf0;
 	}
 	

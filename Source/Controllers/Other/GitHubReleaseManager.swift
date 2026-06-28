@@ -46,15 +46,15 @@ import OSLog
     }
 
     override private init() {
-        guard let config = GitHubReleaseManager.config else {
+        let config = GitHubReleaseManager.config
+        if config == nil {
             Log.error("you must call setup before accessing GitHubReleaseManager.sharedInstance")
-            fatalError("Error - you must call setup before accessing GitHubReleaseManager.sharedInstance")
         }
 
-        user = config.user
-        project = config.project
-        includeDraft = config.includeDraft
-        includePrerelease = config.includePrerelease
+        user = config?.user ?? ""
+        project = config?.project ?? ""
+        includeDraft = config?.includeDraft ?? false
+        includePrerelease = config?.includePrerelease ?? false
 
         Log.debug("GitHubReleaseManager init")
 

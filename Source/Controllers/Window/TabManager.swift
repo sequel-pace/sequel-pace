@@ -89,11 +89,11 @@ import AppKit
     // MARK: - Public API
 
     @objc func switchToPreviousTab() {
-        activeWindowController?.window!.selectPreviousTab(nil)
+        activeWindowController?.window?.selectPreviousTab(nil)
     }
 
     @objc func switchToNextTab() {
-        activeWindowController?.window!.selectNextTab(nil)
+        activeWindowController?.window?.selectNextTab(nil)
     }
 
     @discardableResult
@@ -138,7 +138,10 @@ private extension TabManager {
 
     func createTab(newWindowController: SPWindowController, inWindow window: NSWindow, ordered orderingMode: NSWindow.OrderingMode) {
 
-        guard let newManagement = addManagedWindow(windowController: newWindowController) else { preconditionFailure() }
+        guard let newManagement = addManagedWindow(windowController: newWindowController) else {
+            NSLog("TabManager.createTab: addManagedWindow returned nil — window controller has no window")
+            return
+        }
         let newWindow = newManagement.window
 
         // In case user hits "+" in the UI in tab bar - system automatically creates a tab for us and adds it to the tabGroup - there is no way to avoid it and no way to work around it. In case user hits CMD+T or "New tab" in Menu, it's upon us to do so, so we add tabbed window manually
@@ -152,7 +155,10 @@ private extension TabManager {
 
     func createWindow(newWindowController: SPWindowController, inWindow window: NSWindow, ordered orderingMode: NSWindow.OrderingMode) {
 
-        guard let newManagement = addManagedWindow(windowController: newWindowController) else { preconditionFailure() }
+        guard let newManagement = addManagedWindow(windowController: newWindowController) else {
+            NSLog("TabManager.createWindow: addManagedWindow returned nil — window controller has no window")
+            return
+        }
         let newWindow = newManagement.window
 
         window.addChildWindow(newWindow, ordered: orderingMode)
