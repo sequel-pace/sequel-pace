@@ -104,6 +104,7 @@ print_usage() {
     echo "  debug     Build debug configuration"
     echo "  release   Build release configuration"
     echo "  package   Build release and create signed .dmg"
+    echo "  notarize  Notarize existing DMG and re-upload to GitHub release"
     echo "  tests     Run unit tests"
     echo "  archive   Create distribution archive"
     echo "  clean     Clean build folder"
@@ -378,6 +379,75 @@ do_run() {
     open "${BUILD_DIR}/Build/Products/Debug/${APP_NAME}"
 }
 
+# Command: notarize — submit existing signed DMG to Apple notary, staple, re-upload to GitHub.
+#
+# Required env vars (never hardcoded):
+#   NOTARIZATION_APPLE_ID  — Apple ID email
+#   NOTARIZATION_PASSWORD  — app-specific password from appleid.apple.com
+#   NOTARIZATION_TEAM_ID   — 10-char team ID
+#
+# Optional:
+#   GITHUB_RELEASE_TAG     — GitHub release tag to update (default: latest)
+do_notarize() {
+    local DMG_PATH="${BUILD_DIR}/Sequel PAce.dmg"
+    local APP_PATH="${BUILD_DIR}/Build/Products/Distribution/${APP_NAME}"
+
+    if [ ! -f "${DMG_PATH}" ]; then
+        echo -e "${RED}✗ DMG not found: ${DMG_PATH}${NC}"
+        echo -e "${YELLOW}  Run ./Scripts/build.sh package first.${NC}"
+        exit 1
+    fi
+
+    if [ -z "${NOTARIZATION_APPLE_ID:-}" ] || \
+       [ -z "${NOTARIZATION_PASSWORD:-}" ] || \
+       [ -z "${NOTARIZATION_TEAM_ID:-}" ]; then
+        echo -e "${RED}✗ Missing notarization credentials.${NC}"
+        echo ""
+        echo "  Set these environment variables, then re-run:"
+        echo "    export NOTARIZATION_APPLE_ID=\"you@example.com\""
+        echo "    export NOTARIZATION_PASSWORD=\"xxxx-xxxx-xxxx-xxxx\"  # app-specific password"
+        echo "    export NOTARIZATION_TEAM_ID=\"XXXXXXXXXX\""
+        echo "    ./Scripts/build.sh notarize"
+        echo ""
+        echo "  Generate an app-specific password at: https://appleid.apple.com → Sign-In and Security → App-Specific Passwords"
+        exit 1
+    fi
+
+    echo -e "${BLUE}Submitting DMG for notarization...${NC}"
+    xcrun notarytool submit "${DMG_PATH}" \
+        --apple-id "${NOTARIZATION_APPLE_ID}" \
+        --password "${NOTARIZATION_PASSWORD}" \
+        --team-id "${NOTARIZATION_TEAM_ID}" \
+        --wait
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}✗ Notarization failed.${NC}"
+        echo -e "${YELLOW}  Check logs: xcrun notarytool log <submission-id> --apple-id ... --password ... --team-id ...${NC}"
+        exit 1
+    fi
+
+    echo -e "${BLUE}Stapling notarization ticket to DMG...${NC}"
+    xcrun stapler staple "${DMG_PATH}"
+    echo -e "${GREEN}✓ Notarization complete and stapled${NC}"
+
+    # Verify Gatekeeper acceptance
+    echo -e "${BLUE}Verifying Gatekeeper...${NC}"
+    spctl -a -t open --context context:primary-signature -v "${DMG_PATH}" 2>&1 \
+        && echo -e "${GREEN}✓ Gatekeeper: accepted${NC}" \
+        || echo -e "${YELLOW}⚠ spctl check had warnings (may be fine for DMG)${NC}"
+
+    # Re-upload to GitHub release if gh is available
+    if command -v gh &>/dev/null; then
+        local TAG="${GITHUB_RELEASE_TAG:-$(gh release list --limit 1 --json tagName -q '.[0].tagName')}"
+        if [ -n "$TAG" ]; then
+            echo -e "${BLUE}Uploading notarized DMG to GitHub release ${TAG}...${NC}"
+            gh release upload "${TAG}" "${DMG_PATH}#Sequel-PAce-${TAG}-arm64.dmg" --clobber \
+                && echo -e "${GREEN}✓ GitHub release updated: ${TAG}${NC}" \
+                || echo -e "${YELLOW}⚠ GitHub upload failed — DMG is at: ${DMG_PATH}${NC}"
+        fi
+    fi
+}
+
 # Main
 MODE="${1:-}"
 
@@ -390,6 +460,9 @@ case "$MODE" in
         ;;
     package)
         do_package
+        ;;
+    notarize)
+        do_notarize
         ;;
     tests)
         do_tests
